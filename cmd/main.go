@@ -49,10 +49,10 @@ func main() {
 	
 	http.Handle("/", http.FileServer(http.FS(distFS)))
 
-	serverPort := 19190
-	fmt.Printf("Dashboard disponvel em: http://127.0.0.1:%d\n", serverPort)
+	serverPort := 19192
+	fmt.Printf("Dashboard disponvel em: http://0.0.0.0:%d\n", serverPort)
 	
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", serverPort), nil); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", serverPort), nil); err != nil {
 		log.Fatal(err)
 	}
 }
