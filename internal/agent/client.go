@@ -65,8 +65,7 @@ func (c *Client) listen() {
 }
 
 func (c *Client) sendHandshake() {
-	// Protocolo v3 exige que o client.id seja EXATAMENTE um dos permitidos (cli, web, app, node)
-	// Usaremos "cli" para evitar a rejeição do Gateway.
+	// Protocolo v3: client.id deve ser "cli" e client.mode deve ser "operator"
 	handshake := map[string]interface{}{
 		"type": "req",
 		"id":   fmt.Sprintf("clawflow-%d", time.Now().Unix()),
