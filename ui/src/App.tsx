@@ -1,6 +1,16 @@
-import React from 'react';
 import { motion } from 'framer-motion';
 import { LayoutDashboard, MessageSquare, Settings, Activity, Plus } from 'lucide-react';
+
+interface NavItemProps {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+}
+
+interface QuickActionCardProps {
+  title: string;
+  subtitle: string;
+}
 
 const Dashboard = () => {
   return (
@@ -74,7 +84,7 @@ const Dashboard = () => {
   );
 };
 
-const NavItem = ({ icon, label, active = false }) => (
+const NavItem = ({ icon, label, active = false }: NavItemProps) => (
   <div className={`flex items-center space-x-3 px-4 py-3 rounded-2xl cursor-pointer transition-all duration-200 ${
     active ? 'bg-indigo-600 text-white apple-shadow' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
   }`}>
@@ -83,7 +93,7 @@ const NavItem = ({ icon, label, active = false }) => (
   </div>
 );
 
-const QuickActionCard = ({ title, subtitle }) => (
+const QuickActionCard = ({ title, subtitle }: QuickActionCardProps) => (
   <div className="bg-white p-6 rounded-[24px] border border-gray-200 text-left hover:border-indigo-500 hover:apple-shadow-lg transition-all cursor-pointer group active:scale-[0.98]">
     <h4 className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">{title}</h4>
     <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">{subtitle}</p>
