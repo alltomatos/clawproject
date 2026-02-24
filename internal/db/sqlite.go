@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 // Store gerencia a conexo com o SQLite
@@ -23,7 +23,7 @@ func NewStore() (*Store, error) {
 
 	dbPath := filepath.Join(home, ".openclaw", "clawflow.db")
 	
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao abrir sqlite: %w", err)
 	}

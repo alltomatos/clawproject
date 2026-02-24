@@ -12,7 +12,7 @@ import (
 	"github.com/alltomatos/clawflow/internal/db"
 )
 
-//go:embed ui/dist/*
+//go:embed all:ui
 var uiAssets embed.FS
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	}()
 
 	// 4. Servir Frontend Embutido
-	distFS, err := fs.Sub(uiAssets, "ui/dist")
+	distFS, err := fs.Sub(uiAssets, "ui")
 	if err != nil {
 		log.Fatal(err)
 	}

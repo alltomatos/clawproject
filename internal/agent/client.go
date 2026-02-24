@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"runtime"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -64,7 +65,7 @@ func (c *Client) listen() {
 }
 
 func (c *Client) sendHandshake() {
-	// Estrutura simplificada de conexo do protocolo OpenClaw
+	// Estrutura completa de conexo exigida pelo protocolo OpenClaw v3
 	handshake := map[string]interface{}{
 		"type": "req",
 		"id":   fmt.Sprintf("clawflow-%d", time.Now().Unix()),
@@ -73,12 +74,15 @@ func (c *Client) sendHandshake() {
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"role":        "operator",
+			"scopes":      []string{"operator.read", "operator.write"},
 			"auth": map[string]string{
 				"token": c.config.Gateway.Token,
 			},
-			"client": map[string]string{
-				"id":      "clawflow",
-				"version": "0.1.0",
+			"client": map[string]interface{}{
+				"id":       "clawflow",
+				"version":  "0.1.0",
+				"platform": runtime.GOOS,
+				"mode":     "operator",
 			},
 		},
 	}
