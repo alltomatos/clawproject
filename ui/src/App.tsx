@@ -12,6 +12,7 @@ interface NavItemProps {
 const Dashboard = () => {
   const [view, setView] = useState<'empty' | 'chat'>('empty');
   const [message, setMessage] = useState('');
+  const version = "0.1.2-beta"; // Hardcoded para exibição imediata
 
   const handleStartProject = () => {
     setView('chat');
@@ -55,12 +56,15 @@ const Dashboard = () => {
           </div>
           
           <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-2">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-              </span>
-              <span className="text-sm font-bold text-emerald-600 uppercase tracking-widest">Gateway Online</span>
+            <div className="flex flex-col items-end">
+              <div className="flex items-center space-x-2">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                <span className="text-sm font-bold text-emerald-600 uppercase tracking-widest">Gateway Online</span>
+              </div>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mt-0.5">v{version}</span>
             </div>
           </div>
         </header>

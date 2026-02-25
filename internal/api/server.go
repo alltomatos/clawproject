@@ -21,6 +21,12 @@ func NewServer(store *db.Store) *Server {
 func (s *Server) RegisterHandlers() {
 	http.HandleFunc("/api/projects", s.handleProjects)
 	http.HandleFunc("/api/status", s.handleStatus)
+	http.HandleFunc("/api/version", s.handleVersion)
+}
+
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": core.Version})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
