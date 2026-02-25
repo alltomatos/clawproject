@@ -16,9 +16,9 @@ import (
 )
 
 type Server struct {
-	store           *db.Store
-	managerEnabled  bool
-	managerRuntime  *managerRuntime
+	store          *db.Store
+	managerEnabled bool
+	managerRuntime *managerRuntime
 }
 
 type managerRuntime struct {
@@ -161,11 +161,20 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if len(parts) == 3 && parts[2] == "control" && r.Method == http.MethodPost {
+		s.handleManagerControl(w, r, project)
+		return
+	}
+
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 type managerMessageRequest struct {
 	Message string `json:"message"`
+}
+
+type managerControlRequest struct {
+	Action string `json:"action"`
 }
 
 func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, project *core.Project) {
@@ -188,7 +197,6 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	// Debounce econômico de API (800ms)
 	if last, ok := s.managerRuntime.lastMessage[projectID]; ok {
 		if time.Since(last) < 800*time.Millisecond {
 			http.Error(w, "too many requests, slow down", http.StatusTooManyRequests)
@@ -212,12 +220,61 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	// Placeholder para integração real com sessions_send.
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"mode":    "openclaw-enabled",
 		"reply":   "Integração com sessions_send habilitada para próxima etapa.",
 		"calls":   calls,
 		"project": project.ID,
+	})
+}
+
+func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, project *core.Project) {
+	var req managerControlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action == "" {
+		http.Error(w, "action is required", http.StatusBadRequest)
+		return
+	}
+
+	sessionKey := project.ManagerSessionKey
+	agentID := project.ManagerAgentID
+	status := project.ManagerStatus
+
+	switch action {
+	case "pause":
+		status = "paused"
+	case "resume":
+		if s.managerEnabled {
+			status = "active"
+		} else {
+			status = "offline"
+		}
+	case "restart":
+		sessionKey = fmt.Sprintf("pm-%s-%d", project.ID, time.Now().Unix())
+		if s.managerEnabled {
+			status = "active"
+		} else {
+			status = "offline"
+		}
+	default:
+		http.Error(w, "invalid action", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UpdateProjectManager(r.Context(), project.ID, sessionKey, agentID, status); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":                  true,
+		"action":              action,
+		"manager_session_key": sessionKey,
+		"manager_status":      status,
 	})
 }
 
