@@ -1,3 +1,3 @@
 package core
 
-const Version = "0.1.2-beta"
+const Version = "0.2.1-stable"

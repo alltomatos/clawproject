@@ -31,7 +31,7 @@ const Dashboard = () => {
   const [newDescription, setNewDescription] = useState('');
 
   const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
-  const version = '0.1.9-beta';
+  const version = '0.2.1-stable';
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
   const filteredProjects = projects.filter((p) => statusFilter === 'all' ? true : p.manager_status === statusFilter);
@@ -92,6 +92,11 @@ const Dashboard = () => {
       const r = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error();
       const created: Project = await r.json();
+      
+      // Delay artificial para garantir que o background worker do Go (openclaw agents add)
+      // tenha tempo de concluir antes de abrirmos o chat.
+      await new Promise(resolve => setTimeout(resolve, 3500));
+      
       await loadProjects();
       setSelectedProjectId(created.id);
       setView('chat');
@@ -230,7 +235,19 @@ const Dashboard = () => {
 
             {view === 'newProject' && (
               <motion.div key="newProject" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6 flex items-start justify-center overflow-auto">
-                <div className="w-full max-w-2xl bg-white border rounded-2xl p-6">
+                <div className="w-full max-w-2xl bg-white border rounded-2xl p-6 relative overflow-hidden">
+                  {creatingProject && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
+                      <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                      <h3 className="text-xl font-black mb-2 text-indigo-950">Criando seu Projeto...</h3>
+                      <p className="text-slate-500 text-sm max-w-sm">Estamos registrando o subagente, configurando o workspace isolado e preparando a estrutura de documentos.</p>
+                      <div className="mt-6 flex gap-1">
+                        <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce"></span>
+                        <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                        <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                      </div>
+                    </motion.div>
+                  )}
                   <h3 className="text-xl font-black mb-4">Dados iniciais do projeto</h3>
                   <label className="text-xs font-bold text-slate-500">Nome do projeto</label>
                   <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 mb-4 border rounded-lg px-3 py-2" placeholder="Ex: automacao-comercial-q2" />
@@ -238,7 +255,7 @@ const Dashboard = () => {
                   <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} className="w-full mt-1 mb-4 border rounded-lg px-3 py-2 min-h-[90px]" placeholder="Contexto inicial para o gestor" />
                   <div className="flex justify-end">
                     <button onClick={createProject} disabled={creatingProject || !newName.trim()} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold disabled:opacity-60">
-                      {creatingProject ? 'Criando...' : 'Criar e iniciar'}
+                      {creatingProject ? 'Processando...' : 'Criar e iniciar'}
                     </button>
                   </div>
                 </div>
