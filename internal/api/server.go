@@ -468,8 +468,21 @@ func (s *Server) nextPlannerReply(ctx context.Context, project *core.Project, us
 		reply = "Objetivo registrado. Quais entregáveis imediatos você espera nesta fase (MVP/plano/checklists/scripts/docs)?"
 	case "deliverables":
 		st.Deliverables = strings.TrimSpace(userMessage)
-		st.Stage = "active"
-		reply = "Excelente. Triagem concluída. Vou manter o PLANNING.md atualizado conforme o avanço do projeto."
+		if requiresVisualChecklist(st) {
+			st.Stage = "visual_checklist"
+			_ = s.ensureVisualChecklistDoc(project)
+			reply = "Antes de concluir a triagem: valide o padrão visual. Responda 'checklist visual ok' após revisar o `docs/UI_CHECKLIST.md` (layout, estados, consistência, acessibilidade, responsividade)."
+		} else {
+			st.Stage = "active"
+			reply = "Excelente. Triagem concluída. Vou manter o PLANNING.md atualizado conforme o avanço do projeto."
+		}
+	case "visual_checklist":
+		if confirmsVisualChecklist(userMessage) {
+			st.Stage = "active"
+			reply = "Checklist visual confirmado. Triagem concluída e projeto liberado para execução."
+		} else {
+			reply = "Validação visual pendente. Revise `docs/UI_CHECKLIST.md` e confirme com: checklist visual ok."
+		}
 	default:
 		reply = "Contexto recebido. Vou atualizar os marcos e próximos passos no PLANNING.md."
 	}
@@ -560,16 +573,29 @@ func detectNiche(msg string) string {
 func expectedDeliverablesForNiche(niche string) []string {
 	switch strings.ToLower(strings.TrimSpace(niche)) {
 	case "software":
-		return []string{"PLANNING.md", "PRD.md", "DER.md", "POPS.md"}
+		return []string{"PLANNING.md", "PRD.md", "DER.md", "POPS.md", "UI_CHECKLIST.md"}
 	case "prospeccao":
 		return []string{"PLANNING.md", "FUNIL.md", "SCRIPT_ABORDAGEM.md", "METRICAS.md"}
 	case "conteudo", "conteúdo":
-		return []string{"PLANNING.md", "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md"}
+		return []string{"PLANNING.md", "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md", "UI_CHECKLIST.md"}
 	case "gestao", "gestão", "operacional":
 		return []string{"PLANNING.md", "PLANO_ACAO.md", "CHECKLISTS.md", "POPS.md"}
 	default:
 		return []string{"PLANNING.md", "ENTREGAVEIS.md"}
 	}
+}
+
+func requiresVisualChecklist(st *db.PlannerState) bool {
+	if st == nil {
+		return false
+	}
+	n := strings.ToLower(strings.TrimSpace(st.Niche))
+	return n == "software" || n == "conteudo" || n == "conteúdo"
+}
+
+func confirmsVisualChecklist(msg string) bool {
+	m := strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(m, "checklist visual ok") || strings.Contains(m, "padrão visual ok") || strings.Contains(m, "padrao visual ok")
 }
 
 func (s *Server) updatePlanningFromState(project *core.Project, st *db.PlannerState) error {
@@ -595,6 +621,18 @@ func emptyOrPending(v string) string {
 	return v
 }
 
+func (s *Server) ensureVisualChecklistDoc(project *core.Project) error {
+	if project == nil {
+		return nil
+	}
+	path := filepath.Join(project.Path, "docs", "UI_CHECKLIST.md")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	content := "# UI_CHECKLIST.md\n\n## Validação obrigatória de padrão visual\n- [ ] Layout consistente (header/sidebar/cards)\n- [ ] Estados de loading/empty/error/success\n- [ ] Grid/tabela com padrão único quando aplicável\n- [ ] Acessibilidade mínima (contraste/foco/labels)\n- [ ] Responsividade\n- [ ] Sem variações visuais desnecessárias\n"
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
 func (s *Server) ensureNicheDeliverables(project *core.Project, st *db.PlannerState) error {
 	docsDir := filepath.Join(project.Path, "docs")
 	_ = os.MkdirAll(docsDir, 0755)
@@ -616,6 +654,7 @@ func (s *Server) ensureNicheDeliverables(project *core.Project, st *db.PlannerSt
 		writeIfMissing("PRD.md", fmt.Sprintf("# PRD\n\n## Objetivo\n%s\n\n## Escopo MVP\n%s\n\n## Histórias de Usuário\n- Definir histórias principais\n", objective, deliverables))
 		writeIfMissing("DER.md", "# DER\n\n## Entidades\n- Definir entidades e relacionamentos\n\n## Modelo\n```mermaid\nerDiagram\n  ENTITY ||--o{ OTHER : relates\n```\n")
 		writeIfMissing("POPS.md", "# POPs Técnicos\n\n## POP: Setup local\n- Passos de ambiente\n\n## POP: Deploy\n- Checklist de release\n")
+		_ = s.ensureVisualChecklistDoc(project)
 	case "prospeccao":
 		writeIfMissing("FUNIL.md", fmt.Sprintf("# Funil de Prospecção\n\n## Objetivo\n%s\n\n## Entregáveis esperados\n%s\n\n## Etapas\n- ICP\n- Lista de leads\n- Cadência de contato\n", objective, deliverables))
 		writeIfMissing("SCRIPT_ABORDAGEM.md", "# Script de Abordagem\n\n## Primeiro contato\n- Mensagem inicial\n\n## Follow-up\n- Cadência e objeções\n")
@@ -624,6 +663,7 @@ func (s *Server) ensureNicheDeliverables(project *core.Project, st *db.PlannerSt
 		writeIfMissing("CALENDARIO_EDITORIAL.md", fmt.Sprintf("# Calendário Editorial\n\n## Objetivo\n%s\n\n## Entregáveis\n%s\n\n## Plano semanal\n- Segunda: ...\n- Quarta: ...\n- Sexta: ...\n", objective, deliverables))
 		writeIfMissing("PERSONA.md", "# Persona\n\n## Público-alvo\n- Perfil\n\n## Dores\n- ...\n")
 		writeIfMissing("GUIA_ESTILO.md", "# Guia de Estilo\n\n## Tom de voz\n- ...\n\n## Formatos\n- ...\n")
+		_ = s.ensureVisualChecklistDoc(project)
 	case "gestao", "gestão", "operacional":
 		writeIfMissing("PLANO_ACAO.md", fmt.Sprintf("# Plano de Ação\n\n## Objetivo\n%s\n\n## Entregáveis\n%s\n\n## Frentes\n- Frente 1\n- Frente 2\n", objective, deliverables))
 		writeIfMissing("CHECKLISTS.md", "# Checklists Operacionais\n\n## Rotina diária\n- [ ] ...\n\n## Rotina semanal\n- [ ] ...\n")

@@ -36,8 +36,8 @@ const Dashboard = () => {
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
   const filteredProjects = projects.filter((p) => statusFilter === 'all' ? true : p.manager_status === statusFilter);
   const managerOnline = manager?.manager_status === 'active';
-  const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'active'];
-  const stageLabels: Record<string, string> = { triage_type: 'Tipo', triage_niche: 'Nicho', objective: 'Objetivo', deliverables: 'Entregáveis', active: 'Execução' };
+  const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'visual_checklist', 'active'];
+  const stageLabels: Record<string, string> = { triage_type: 'Tipo', triage_niche: 'Nicho', objective: 'Objetivo', deliverables: 'Entregáveis', visual_checklist: 'Checklist Visual', active: 'Execução' };
   const stageIndex = planner ? Math.max(0, plannerStages.indexOf(planner.stage)) : 0;
 
   const loadProjects = async () => {
