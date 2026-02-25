@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	"github.com/alltomatos/clawproject/internal/core"
 )
 

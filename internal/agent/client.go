@@ -64,10 +64,6 @@ func (c *Client) listen() {
 }
 
 func (c *Client) sendHandshake() {
-	// Protocolo v3: Ajuste final conforme erro recorrente no mode.
-	// O gateway espera 'mode' dentro de 'client' como uma constante.
-	// Se 'operator' falha com 'must be equal to constant', tentaremos 'node' 
-	// apenas para forçar a entrada, mas a role continua como 'operator'.
 	handshake := map[string]interface{}{
 		"type": "req",
 		"id":   "h1",
@@ -82,9 +78,12 @@ func (c *Client) sendHandshake() {
 			},
 			"client": map[string]interface{}{
 				"id":       "cli",
-				"version":  "1.2.3",
+				"version":  "1.0.0",
 				"platform": runtime.GOOS,
-				"mode":     "node", 
+				"mode":     "operator",
+			},
+			"device": map[string]interface{}{
+				"id": "clawproject-local",
 			},
 		},
 	}

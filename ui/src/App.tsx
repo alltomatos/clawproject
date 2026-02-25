@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, FileText, Target, Map, CheckCircle2 } from 'lucide-react';
+import { useState } from 'react';
+import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, FileText, Target, CheckCircle2 } from 'lucide-react';
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -31,7 +31,6 @@ const Dashboard = () => {
     const newUserMsg = { sender: 'user', message: message };
     setChatHistory(prev => [...prev, newUserMsg]);
     
-    // Lógica simples de triagem inicial no front para demonstração de fluxo
     const input = message.toLowerCase();
     let agentReply = "";
 
@@ -219,7 +218,7 @@ const DeliverableCard = ({ icon, title, desc }: { icon: React.ReactNode, title: 
       {icon}
     </div>
     <h4 className="font-bold text-gray-900 text-sm">{title}</h4>
-    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter mt-1">{desc}</p>
+    <p className="text-[10px] text-gray-400 font-black uppercase tracking-tighter mt-1">{desc}</p>
   </div>
 );
 
