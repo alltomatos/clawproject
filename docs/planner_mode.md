@@ -27,10 +27,13 @@ Pergunta obrigatória para início de qualquer projeto:
 #### CAMINHO B: Projeto Existente (Engenharia Reversa)
 **Objetivo:** Mapear o sistema atual e identificar gargalos.
 1. **Insumos Requeridos:**
-   - Trechos de código estruturais (Models, Rotas, Controllers) ou Schema SQL.
-   - Arquivos de configuração (docker-compose, go.mod, package.json).
-   - Dores principais na manutenção ou operação atual.
-2. **Entregáveis (Documento Unificado):**
+   - **Controle de Versão:** Perguntar se o projeto possui repositório Git.
+   - **Acesso:** Se sim, solicitar a URL do repositório e orientações específicas sobre como realizar o clone (ex: necessidade de chaves SSH, subpáginas, dependências externas).
+   - **Código:** Caso não haja Git, solicitar que cole trechos de código estruturais (Models, Rotas, Controllers) ou Schema SQL.
+   - **Contexto:** Arquivos de configuração (docker-compose, go.mod, package.json).
+   - **Dores:** Principais dificuldades na manutenção ou operação atual.
+2. **Ação do Agente:** Clonar o repositório dentro do workspace do OpenClaw para análise profunda se os acessos forem fornecidos.
+3. **Entregáveis (Documento Unificado):**
    - **PRD Retrospectivo:** O que o sistema faz (baseado no código).
    - **DER Extraído:** Mapeamento de tabelas e relações.
    - **POPs Operacionais:** Troubleshooting, Manutenção, Deploy e Onboarding Técnico.
