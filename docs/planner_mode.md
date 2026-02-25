@@ -47,3 +47,4 @@ Pergunta obrigatória para início de qualquer projeto:
 - **Isolamento:** O histórico, decisões e progresso ficam no contexto desse subagente (evita mistura entre projetos).
 - **Responsabilidades do Subagente Gestor:** Conduzir triagem, manter `docs/` atualizado, cobrar entregáveis e reportar status do projeto.
 - **Tom:** Técnico, direto, sem jargões corporativos vazios.
+- **Padrão Visual (quando houver tela):** Qualquer entregável com interface deve seguir obrigatoriamente o padrão definido em `docs/UI_VISUAL_STANDARD.md`.
