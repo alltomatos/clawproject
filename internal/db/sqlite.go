@@ -21,7 +21,7 @@ func NewStore() (*Store, error) {
 		return nil, fmt.Errorf("falha ao obter home: %w", err)
 	}
 
-	dbPath := filepath.Join(home, ".openclaw", "clawflow.db")
+	dbPath := filepath.Join(home, ".openclaw", "clawproject.db")
 	
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
