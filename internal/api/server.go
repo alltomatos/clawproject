@@ -290,6 +290,7 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 	}
 	_ = s.store.AddProjectMessage(r.Context(), project.ID, "agent", reply)
 	_ = s.refreshProjectSummary(r.Context(), project.ID)
+	_ = s.syncIncrementalDeliverables(r.Context(), project, req.Message, reply)
 
 	s.managerRuntime.mu.Lock()
 	s.managerRuntime.busy[projectID] = false
@@ -617,6 +618,50 @@ func (s *Server) ensureProjectWorkspace(p *core.Project) error {
 		_ = exec.Command("git", "-C", root, "init").Run()
 	}
 
+	return nil
+}
+
+func (s *Server) syncIncrementalDeliverables(ctx context.Context, project *core.Project, userMessage, agentReply string) error {
+	if project == nil {
+		return nil
+	}
+	st, err := s.store.GetPlannerState(ctx, project.ID)
+	if err != nil || st == nil {
+		return err
+	}
+	if st.Stage != "active" {
+		return nil
+	}
+
+	docsDir := filepath.Join(project.Path, "docs")
+	niche := strings.ToLower(strings.TrimSpace(st.Niche))
+	targets := []string{"PLANNING.md"}
+	switch niche {
+	case "software":
+		targets = append(targets, "PRD.md", "DER.md", "POPS.md")
+	case "prospeccao":
+		targets = append(targets, "FUNIL.md", "SCRIPT_ABORDAGEM.md", "METRICAS.md")
+	case "conteudo", "conteúdo":
+		targets = append(targets, "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md")
+	case "gestao", "gestão", "operacional":
+		targets = append(targets, "PLANO_ACAO.md", "CHECKLISTS.md", "POPS.md")
+	default:
+		targets = append(targets, "ENTREGAVEIS.md")
+	}
+
+	entry := fmt.Sprintf("\n\n## Marco %s\n- Input usuário: %s\n- Resposta gestor: %s\n", time.Now().Format("2006-01-02 15:04"), compactText(userMessage, 220), compactText(agentReply, 260))
+	for _, name := range targets {
+		path := filepath.Join(docsDir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			continue
+		}
+		_, _ = f.WriteString(entry)
+		_ = f.Close()
+	}
 	return nil
 }
 
