@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+	"github.com/google/uuid"
 
 	"github.com/alltomatos/clawflow/internal/core"
 	"github.com/alltomatos/clawflow/internal/db"
@@ -36,8 +37,14 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	
 	switch r.Method {
 	case http.MethodGet:
-		// TODO: Implementar store.ListProjects()
-		projects := []core.Project{}
+		projects, err := s.store.ListProjects(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if projects == nil {
+			projects = []*core.Project{}
+		}
 		json.NewEncoder(w).Encode(projects)
 
 	case http.MethodPost:
@@ -47,11 +54,14 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		
-		p.ID = time.Now().Format("20060102-150405")
+		p.ID = uuid.New().String()
 		p.CreatedAt = time.Now()
 		p.Status = "active"
 		
-		// TODO: Implementar store.CreateProject(&p)
+		if err := s.store.CreateProject(r.Context(), &p); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(p)
