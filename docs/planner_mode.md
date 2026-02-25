@@ -43,4 +43,7 @@ Pergunta obrigatória para início de qualquer projeto:
 - **Proatividade Documental:** O agente deve criar novos documentos em `docs/` sempre que uma nova regra de negócio ou arquitetura for definida.
 - **Versionamento:** Inicialização imediata de `git init`.
 - **Persistência:** O documento unificado gerado na triagem deve ser salvo como `docs/PLANNING.md`.
+- **Subagente por Projeto (Obrigatório):** Cada projeto deve ter um subagente gestor dedicado (`project_manager_agent`) vinculado ao `project_id`.
+- **Isolamento:** O histórico, decisões e progresso ficam no contexto desse subagente (evita mistura entre projetos).
+- **Responsabilidades do Subagente Gestor:** Conduzir triagem, manter `docs/` atualizado, cobrar entregáveis e reportar status do projeto.
 - **Tom:** Técnico, direto, sem jargões corporativos vazios.
