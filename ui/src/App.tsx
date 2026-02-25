@@ -13,6 +13,14 @@ type ChatItem = { sender: 'agent' | 'user'; message: string };
 type Project = { id: string; name: string; manager_status: string; manager_session_key: string };
 type ManagerInfo = { manager_status: string; manager_enabled: boolean; manager_session_key: string; api_calls: number };
 type ProjectMessage = { id: string; sender: 'agent' | 'user'; message: string };
+type PlannerInfo = {
+  stage: string;
+  project_type: string;
+  niche: string;
+  deliverables: string[];
+  deliverables_done: string[];
+  last_checkpoint: string;
+};
 
 const Dashboard = () => {
   const [view, setView] = useState<'empty' | 'chat'>('empty');
@@ -24,12 +32,13 @@ const Dashboard = () => {
   const [sending, setSending] = useState(false);
   const [controlling, setControlling] = useState(false);
   const [projectSummary, setProjectSummary] = useState<string>('');
+  const [planner, setPlanner] = useState<PlannerInfo | null>(null);
 
   const [chatHistory, setChatHistory] = useState<ChatItem[]>([
     { sender: 'agent', message: 'Olá! Selecione/crie um projeto e converse com o gestor dedicado.' },
   ]);
 
-  const version = '0.1.6-beta';
+  const version = '0.1.7-beta';
   const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
 
@@ -70,6 +79,17 @@ const Dashboard = () => {
     }
   };
 
+  const loadPlanner = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/planner`);
+      if (!res.ok) return;
+      const data: PlannerInfo = await res.json();
+      setPlanner(data);
+    } catch {
+      // noop
+    }
+  };
+
   const loadMessages = async (projectId: string) => {
     try {
       const res = await fetch(`/api/projects/${projectId}/messages`);
@@ -94,6 +114,7 @@ const Dashboard = () => {
       if (!selectedProjectId) return;
       await loadMessages(selectedProjectId);
       await loadSummary(selectedProjectId);
+      await loadPlanner(selectedProjectId);
       const info = await loadManager(selectedProjectId);
 
       const needReconnect = info && (info.manager_status === 'offline' || info.manager_status === 'paused');
@@ -132,6 +153,7 @@ const Dashboard = () => {
       setSelectedProjectId(created.id);
       await loadManager(created.id);
       await loadSummary(created.id);
+      await loadPlanner(created.id);
       setChatHistory((prev) => [...prev, { sender: 'agent', message: `Projeto criado. Sessão do gestor: ${created.manager_session_key}` }]);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Falha ao criar projeto agora.' }]);
@@ -155,6 +177,7 @@ const Dashboard = () => {
       await loadProjects();
       await loadManager(selectedProjectId);
       await loadSummary(selectedProjectId);
+      await loadPlanner(selectedProjectId);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: `Falha ao executar '${action}' no gestor.` }]);
     } finally {
@@ -188,6 +211,7 @@ const Dashboard = () => {
       }
       await loadManager(selectedProjectId);
       await loadSummary(selectedProjectId);
+      await loadPlanner(selectedProjectId);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Gestor indisponível no momento.' }]);
     } finally {
@@ -196,6 +220,15 @@ const Dashboard = () => {
   };
 
   const managerOnline = manager?.manager_status === 'active';
+  const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'active'];
+  const stageLabels: Record<string, string> = {
+    triage_type: 'Tipo',
+    triage_niche: 'Nicho',
+    objective: 'Objetivo',
+    deliverables: 'Entregáveis',
+    active: 'Execução',
+  };
+  const stageIndex = planner ? Math.max(0, plannerStages.indexOf(planner.stage)) : 0;
 
   return (
     <div className="flex h-screen w-full bg-[#F5F5F7] overflow-hidden text-[#1D1D1F]">
@@ -284,6 +317,39 @@ const Dashboard = () => {
                 <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200">
                   <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Contexto sumarizado do projeto</div>
                   <div className="text-xs text-slate-700 whitespace-pre-wrap">{projectSummary || 'Sem resumo ainda.'}</div>
+                </div>
+
+                <div className="mb-4 p-3 rounded-xl bg-white border border-indigo-100">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-2">Progresso da Triagem</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {plannerStages.map((stg, idx) => (
+                      <div key={stg} className={`px-2 py-1 rounded-lg text-[10px] font-bold ${idx <= stageIndex ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {idx + 1}. {stageLabels[stg]}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-2">Etapa atual: <b>{planner ? stageLabels[planner.stage] || planner.stage : 'Tipo'}</b></div>
+                </div>
+
+                <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-xl bg-white border border-slate-200">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Entregáveis Gerados</div>
+                    <div className="space-y-1">
+                      {(planner?.deliverables || []).map((d) => {
+                        const done = (planner?.deliverables_done || []).includes(d);
+                        return (
+                          <div key={d} className={`text-xs font-semibold ${done ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {done ? '✅' : '⏳'} {d}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-white border border-slate-200">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Checkpoint Git (Marco)</div>
+                    <div className="text-xs text-slate-700 break-all">{planner?.last_checkpoint || 'Sem checkpoint ainda.'}</div>
+                  </div>
                 </div>
 
                 <div className="mb-4 flex gap-2">

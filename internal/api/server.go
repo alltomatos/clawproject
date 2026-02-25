@@ -180,6 +180,41 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if parts[1] == "planner" && r.Method == http.MethodGet {
+		st, _ := s.store.GetPlannerState(r.Context(), projectID)
+		niche := ""
+		stage := "triage_type"
+		projectType := ""
+		if st != nil {
+			niche = st.Niche
+			stage = st.Stage
+			projectType = st.ProjectType
+		}
+		deliverables := expectedDeliverablesForNiche(niche)
+		docsDir := filepath.Join(project.Path, "docs")
+		existing := []string{}
+		for _, f := range deliverables {
+			if _, err := os.Stat(filepath.Join(docsDir, f)); err == nil {
+				existing = append(existing, f)
+			}
+		}
+		lastCheckpoint := ""
+		cmd := exec.Command("git", "-C", project.Path, "log", "--oneline", "-n", "1", "--", "docs")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			lastCheckpoint = strings.TrimSpace(string(out))
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"project_id":       projectID,
+			"stage":            stage,
+			"project_type":     projectType,
+			"niche":            niche,
+			"deliverables":     deliverables,
+			"deliverables_done": existing,
+			"last_checkpoint":  lastCheckpoint,
+		})
+		return
+	}
+
 	if parts[1] != "manager" {
 		http.NotFound(w, r)
 		return
@@ -474,6 +509,21 @@ func detectNiche(msg string) string {
 		return "operacional"
 	default:
 		return ""
+	}
+}
+
+func expectedDeliverablesForNiche(niche string) []string {
+	switch strings.ToLower(strings.TrimSpace(niche)) {
+	case "software":
+		return []string{"PLANNING.md", "PRD.md", "DER.md", "POPS.md"}
+	case "prospeccao":
+		return []string{"PLANNING.md", "FUNIL.md", "SCRIPT_ABORDAGEM.md", "METRICAS.md"}
+	case "conteudo", "conteúdo":
+		return []string{"PLANNING.md", "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md"}
+	case "gestao", "gestão", "operacional":
+		return []string{"PLANNING.md", "PLANO_ACAO.md", "CHECKLISTS.md", "POPS.md"}
+	default:
+		return []string{"PLANNING.md", "ENTREGAVEIS.md"}
 	}
 }
 
