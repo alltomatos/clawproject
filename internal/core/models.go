@@ -5,13 +5,16 @@ import (
 )
 
 type Project struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Path        string    `json:"path"`
-	GitURL      string    `json:"git_url"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description"`
+	Path              string    `json:"path"`
+	GitURL            string    `json:"git_url"`
+	Status            string    `json:"status"`
+	ManagerSessionKey string    `json:"manager_session_key"`
+	ManagerAgentID    string    `json:"manager_agent_id"`
+	ManagerStatus     string    `json:"manager_status"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type POP struct {
