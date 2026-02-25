@@ -515,12 +515,8 @@ func (s *Server) runOpenClawManagerTurn(project *core.Project, userMessage strin
 	if summary != nil {
 		summaryText = compactText(summary.Summary, 500)
 	}
-	profile, _ := s.store.GetManagerProfile(context.Background(), project.ID)
-	profileText := ""
-	if profile != nil && strings.TrimSpace(profile.Instructions) != "" {
-		profileText = compactText(profile.Instructions, 700)
-	}
-	prompt := fmt.Sprintf("%s\n\nAjustes de treinamento do gestor: %s\n\nProjeto: %s\nSessão: %s\nContexto resumido: %s\nMensagem do usuário: %s", baseManagerPromptByNiche(niche), emptyOrPending(profileText), project.Name, sessionID, summaryText, userMessage)
+	docsContext := s.buildDocsContext(project.Path, niche)
+	prompt := fmt.Sprintf("%s\n\nProjeto: %s\nSessão: %s\nContexto resumido: %s\nContexto da Bíblia (docs): %s\nMensagem do usuário: %s", baseManagerPromptByNiche(niche), project.Name, sessionID, summaryText, docsContext, userMessage)
 	cmd := exec.Command("openclaw", "agent", "--agent", agentID, "--session-id", sessionID, "--message", prompt, "--json", "--timeout", "90")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -864,6 +860,30 @@ func compactPreviousSummary(summary string, max int) string {
 		return "Sem memória anterior consolidada."
 	}
 	return summary
+}
+
+func (s *Server) buildDocsContext(projectPath, niche string) string {
+	docsDir := filepath.Join(projectPath, "docs")
+	files := expectedDeliverablesForNiche(niche)
+	if len(files) == 0 {
+		files = []string{"PLANNING.md"}
+	}
+	chunks := []string{}
+	for _, f := range files {
+		path := filepath.Join(docsDir, f)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		chunks = append(chunks, fmt.Sprintf("[%s] %s", f, compactText(string(b), 260)))
+		if len(chunks) >= 3 {
+			break
+		}
+	}
+	if len(chunks) == 0 {
+		return "docs pendente"
+	}
+	return strings.Join(chunks, " | ")
 }
 
 func toBullets(items []string) string {

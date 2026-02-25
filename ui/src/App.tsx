@@ -8,7 +8,6 @@ type Project = { id: string; name: string; manager_status: string; manager_sessi
 type ManagerInfo = { manager_status: string; manager_enabled: boolean; manager_session_key: string; api_calls: number; daily_calls?: number };
 type ProjectMessage = { id: string; sender: 'agent' | 'user'; message: string };
 type PlannerInfo = { stage: string; project_type: string; niche: string; deliverables: string[]; deliverables_done: string[]; last_checkpoint: string };
-type ManagerProfile = { project_id: string; instructions: string };
 
 const Dashboard = () => {
   const [view, setView] = useState<'empty' | 'chat'>('empty');
@@ -17,11 +16,9 @@ const Dashboard = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [manager, setManager] = useState<ManagerInfo | null>(null);
   const [planner, setPlanner] = useState<PlannerInfo | null>(null);
-  const [profilePrompt, setProfilePrompt] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
   const [sending, setSending] = useState(false);
   const [controlling, setControlling] = useState(false);
-  const [savingPrompt, setSavingPrompt] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatItem[]>([{ sender: 'agent', message: 'Selecione/crie um projeto e converse com o gestor.' }]);
   const version = '0.1.8-beta';
   const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
@@ -44,16 +41,12 @@ const Dashboard = () => {
     const data: ProjectMessage[] = await r.json();
     setChatHistory(data.length ? data.map((m) => ({ sender: m.sender, message: m.message })) : [{ sender: 'agent', message: 'Sem histórico ainda.' }]);
   };
-  const loadProfile = async (projectId: string) => {
-    const r = await fetch(`/api/projects/${projectId}/manager/profile`); if (!r.ok) return;
-    const data: ManagerProfile = await r.json(); setProfilePrompt(data.instructions || '');
-  };
 
   useEffect(() => { loadProjects(); }, []);
   useEffect(() => {
     const boot = async () => {
       if (!selectedProjectId) return;
-      await Promise.all([loadMessages(selectedProjectId), loadManager(selectedProjectId), loadPlanner(selectedProjectId), loadProfile(selectedProjectId)]);
+      await Promise.all([loadMessages(selectedProjectId), loadManager(selectedProjectId), loadPlanner(selectedProjectId)]);
       if ((manager?.manager_status === 'offline' || manager?.manager_status === 'paused') && !reconnectAttemptedRef.current[selectedProjectId]) {
         reconnectAttemptedRef.current[selectedProjectId] = true;
         await fetch(`/api/projects/${selectedProjectId}/manager/control`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'resume' }) });
@@ -95,15 +88,7 @@ const Dashboard = () => {
     } finally { setControlling(false); }
   };
 
-  const savePromptTraining = async () => {
-    if (!selectedProjectId || savingPrompt) return;
-    setSavingPrompt(true);
-    try {
-      await fetch(`/api/projects/${selectedProjectId}/manager/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instructions: profilePrompt }) });
-      setChatHistory((p) => [...p, { sender: 'agent', message: 'Treinamento do gestor atualizado para este projeto.' }]);
-    } finally { setSavingPrompt(false); }
-  };
-
+  
   return (
     <div className="flex h-screen w-full bg-[#F5F5F7] overflow-hidden text-[#1D1D1F]">
       <aside className="w-20 md:w-72 glass border-r border-gray-200 flex flex-col p-4 z-20">
@@ -145,10 +130,6 @@ const Dashboard = () => {
                     <Panel title="Entregáveis (docs/)">{(planner?.deliverables || []).map((d) => { const done = (planner?.deliverables_done || []).includes(d); return <div key={d} className={`text-xs font-semibold ${done ? 'text-emerald-600' : 'text-slate-400'}`}>{done ? '✅' : '⏳'} {d}</div>; })}</Panel>
                     <Panel title="Checkpoint Git"><div className="text-xs break-all">{planner?.last_checkpoint || 'Sem checkpoint ainda.'}</div></Panel>
                     <Panel title="Resumo do Projeto"><div className="text-xs whitespace-pre-wrap text-slate-700">{(chatHistory.find((m) => m.sender === 'agent')?.message || 'Sem resumo ainda.')}</div></Panel>
-                    <Panel title="Treinar Gestor (prompt do projeto)">
-                      <textarea value={profilePrompt} onChange={(e) => setProfilePrompt(e.target.value)} placeholder="Ex: você é gestor multi-nicho, entregue decisões claras, riscos e próximos passos..." className="w-full min-h-[110px] text-xs border border-slate-200 rounded-lg p-2" />
-                      <button onClick={savePromptTraining} disabled={savingPrompt} className="mt-2 w-full bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg disabled:opacity-60">{savingPrompt ? 'Salvando...' : 'Aplicar Treinamento'}</button>
-                    </Panel>
                   </aside>
                 </div>
               </motion.div>
@@ -176,3 +157,5 @@ const ChatBubble = ({ sender, message }: { sender: 'agent' | 'user'; message: st
 );
 
 export default Dashboard;
+
+
