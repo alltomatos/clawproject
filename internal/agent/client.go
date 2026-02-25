@@ -6,25 +6,26 @@ import (
 	"log"
 	"net/url"
 	"runtime"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/alltomatos/clawflow/internal/core"
 )
 
-// Client representa a conexão com o Gateway OpenClaw
+// Client representa a conexo com o Gateway OpenClaw
 type Client struct {
 	conn   *websocket.Conn
 	config *core.OpenClawConfig
 }
 
-// NewClient cria uma nova instância do cliente agentico
+// NewClient cria uma nova instncia do cliente agentico
 func NewClient(cfg *core.OpenClawConfig) *Client {
 	return &Client{
 		config: cfg,
 	}
 }
 
-// Connect inicia a conexão WebSocket e realiza o handshake
+// Connect inicia a conexo WebSocket e realiza o handshake
 func (c *Client) Connect() error {
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("127.0.0.1:%d", c.config.Gateway.Port), Path: "/ws"}
 	log.Printf("Conectando ao Gateway OpenClaw em %s", u.String())
@@ -55,7 +56,7 @@ func (c *Client) listen() {
 			continue
 		}
 
-		// Lógica de resposta ao challenge do protocolo v3
+		// Lgica de resposta ao challenge do protocolo v3
 		if msg["event"] == "connect.challenge" {
 			log.Println("Challenge recebido. Respondendo com Handshake...")
 			c.sendHandshake()
@@ -64,27 +65,28 @@ func (c *Client) listen() {
 }
 
 func (c *Client) sendHandshake() {
-	// Protocolo v3: Inserindo device identity para conformidade
+	// Protocolo v3 EXIGE que o client.id seja uma das constantes (cli, web, app, node)
+	// E o campo 'mode' dentro de 'client' tambm  validado rigidamente.
+	// O erro 1008 "must be equal to constant" sugere que o Gateway est esperando 
+	// um dos valores permitidos no schema AnyOf do TypeBox.
+	
 	handshake := map[string]interface{}{
 		"type": "req",
-		"id":   "h1",
+		"id":   fmt.Sprintf("cf-%d", time.Now().Unix()),
 		"method": "connect",
 		"params": map[string]interface{}{
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"role":        "operator",
-			"scopes":      []string{"operator.read", "operator.write"},
-			"auth": map[string]interface{}{
+			"scopes":      []string{"operator.read", "operator.write", "operator.admin"},
+			"auth": map[string]string{
 				"token": c.config.Gateway.Token,
 			},
 			"client": map[string]interface{}{
 				"id":       "cli",
-				"version":  "1.0.0",
+				"version":  "1.2.3",
 				"platform": runtime.GOOS,
 				"mode":     "operator",
-			},
-			"device": map[string]interface{}{
-				"id": "clawflow-local-system",
 			},
 		},
 	}
