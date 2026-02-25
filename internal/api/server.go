@@ -35,7 +35,8 @@ type managerRuntime struct {
 }
 
 func NewServer(store *db.Store) *Server {
-	enabled := strings.EqualFold(os.Getenv("OPENCLAW_MANAGER_ENABLED"), "true")
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv("OPENCLAW_MANAGER_ENABLED")))
+	enabled := raw != "false" && raw != "0" && raw != "off"
 	return &Server{
 		store:          store,
 		managerEnabled: enabled,
