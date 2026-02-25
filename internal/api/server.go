@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +110,11 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				p.ManagerSessionKey = fmt.Sprintf("local-pm-%s", p.ID)
 				p.ManagerStatus = "offline"
 			}
+		}
+
+		if err := s.ensureProjectWorkspace(&p); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		if err := s.store.CreateProject(r.Context(), &p); err != nil {
@@ -368,6 +375,34 @@ func (s *Server) refreshProjectSummary(ctx context.Context, projectID string) er
 		time.Now().Format(time.RFC3339))
 
 	return s.store.UpsertProjectSummary(ctx, projectID, summary)
+}
+
+func (s *Server) ensureProjectWorkspace(p *core.Project) error {
+	if p == nil {
+		return fmt.Errorf("project is nil")
+	}
+	root := filepath.Clean(p.Path)
+	docsDir := filepath.Join(root, "docs")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		return fmt.Errorf("falha ao criar estrutura do projeto: %w", err)
+	}
+
+	planningPath := filepath.Join(docsDir, "PLANNING.md")
+	if _, err := os.Stat(planningPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		bootstrap := fmt.Sprintf("# PLANNING.md\n\nProjeto: %s\n\n## Triagem Inicial\n- Tipo: pendente (Novo/Existente)\n- Nicho: pendente\n\n## Objetivo\n- Definir objetivo principal\n\n## Entregáveis\n- docs/PLANNING.md (este arquivo)\n- PRD/DER/POPs conforme nicho\n\n## Próximos passos\n- Conduzir triagem no chat com o gestor dedicado.\n", p.Name)
+		if err := os.WriteFile(planningPath, []byte(bootstrap), 0644); err != nil {
+			return fmt.Errorf("falha ao criar PLANNING.md: %w", err)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(root, ".git")); os.IsNotExist(err) {
+		_ = exec.Command("git", "-C", root, "init").Run()
+	}
+
+	return nil
 }
 
 func collectMilestones(messages []string, keywords []string, max int) []string {
