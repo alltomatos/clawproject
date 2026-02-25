@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/url"
 	"runtime"
-	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/alltomatos/clawflow/internal/core"
@@ -65,20 +64,19 @@ func (c *Client) listen() {
 }
 
 func (c *Client) sendHandshake() {
-	// Protocolo v3 EXIGE que o client.id seja uma das constantes (cli, web, app, node)
-	// E o campo 'mode' dentro de 'client' tambm  validado rigidamente.
-	// O erro 1008 "must be equal to constant" sugere que o Gateway est esperando 
-	// um dos valores permitidos no schema AnyOf do TypeBox.
-	
+	// Protocolo v3: Ajuste final conforme erro recorrente no mode.
+	// O gateway espera 'mode' dentro de 'client' como uma constante.
+	// Se 'operator' falha com 'must be equal to constant', tentaremos 'node' 
+	// apenas para forçar a entrada, mas a role continua como 'operator'.
 	handshake := map[string]interface{}{
 		"type": "req",
-		"id":   fmt.Sprintf("cf-%d", time.Now().Unix()),
+		"id":   "h1",
 		"method": "connect",
 		"params": map[string]interface{}{
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"role":        "operator",
-			"scopes":      []string{"operator.read", "operator.write", "operator.admin"},
+			"scopes":      []string{"operator.read", "operator.write"},
 			"auth": map[string]string{
 				"token": c.config.Gateway.Token,
 			},
@@ -86,7 +84,7 @@ func (c *Client) sendHandshake() {
 				"id":       "cli",
 				"version":  "1.2.3",
 				"platform": runtime.GOOS,
-				"mode":     "operator",
+				"mode":     "node", 
 			},
 		},
 	}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot } from 'lucide-react';
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -12,10 +12,23 @@ interface NavItemProps {
 const Dashboard = () => {
   const [view, setView] = useState<'empty' | 'chat'>('empty');
   const [message, setMessage] = useState('');
-  const version = "0.1.2-beta"; // Hardcoded para exibição imediata
+  const [chatHistory, setChatHistory] = useState([
+    { sender: 'agent', message: 'Olá, Ronaldo! Sou o watinker_bot (Sessão: Main). Estou pronto para planejar seu novo projeto. Para começarmos, qual o nome do projeto e qual o objetivo central?' }
+  ]);
+  const version = "0.1.2-beta";
 
   const handleStartProject = () => {
     setView('chat');
+  };
+
+  const handleSendMessage = () => {
+    if (!message.trim()) return;
+    
+    // Simulação de envio enquanto estabilizamos o backend
+    setChatHistory([...chatHistory, { sender: 'user', message: message }]);
+    setMessage('');
+    
+    // TODO: Chamar API real do ClawFlow que roteia para o OpenClaw
   };
 
   return (
@@ -31,7 +44,7 @@ const Dashboard = () => {
 
         <nav className="flex-1 space-y-2">
           <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={view === 'empty'} onClick={() => setView('empty')} />
-          <NavItem icon={<MessageSquare size={20} />} label="Projetos" active={view === 'chat'} />
+          <NavItem icon={<MessageSquare size={20} />} label="Projetos" active={view === 'chat'} onClick={() => setView('chat')} />
           <NavItem icon={<Activity size={20} />} label="Logs do Agente" />
         </nav>
 
@@ -70,7 +83,7 @@ const Dashboard = () => {
         </header>
 
         {/* Content Area with AnimatePresence */}
-        <section className="flex-1 relative">
+        <section className="flex-1 relative overflow-hidden">
           <AnimatePresence mode="wait">
             {view === 'empty' ? (
               <motion.div 
@@ -81,7 +94,7 @@ const Dashboard = () => {
                 transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
                 className="h-full flex flex-col items-center justify-center text-center max-w-2xl mx-auto p-8"
               >
-                <div className="w-24 h-24 bg-white rounded-[32px] apple-shadow-lg flex items-center justify-center mb-8">
+                <div className="w-24 h-24 bg-white rounded-[32px] apple-shadow-lg flex items-center justify-center mb-8 border border-gray-100">
                   <MessageSquare size={40} className="text-indigo-600" />
                 </div>
                 <h1 className="text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">O quadro está vazio.</h1>
@@ -111,12 +124,11 @@ const Dashboard = () => {
                 transition={{ duration: 0.5, ease: [0.23, 1, 0.32, 1] }}
                 className="h-full flex flex-col p-8 max-w-4xl mx-auto"
               >
-                {/* Chat Bubble Area */}
+                {/* Chat History Area */}
                 <div className="flex-1 space-y-6 overflow-y-auto mb-6 pr-4">
-                  <ChatBubble 
-                    sender="agent" 
-                    message="Olá, Ronaldo! Estou pronto para planejar seu novo projeto. Para começarmos, qual o nome do projeto e qual o objetivo central?" 
-                  />
+                  {chatHistory.map((item, idx) => (
+                    <ChatBubble key={idx} sender={item.sender as 'agent' | 'user'} message={item.message} />
+                  ))}
                 </div>
 
                 {/* Input Area */}
@@ -125,15 +137,19 @@ const Dashboard = () => {
                     type="text"
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                     placeholder="Descreva seu projeto aqui..."
                     className="w-full bg-white border border-gray-200 rounded-[28px] py-5 px-8 pr-16 apple-shadow-lg focus:outline-none focus:border-indigo-500 transition-all text-lg font-medium"
                   />
-                  <button className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-indigo-600 rounded-full flex items-center justify-center text-white shadow-md active:scale-90 transition-transform">
+                  <button 
+                    onClick={handleSendMessage}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-indigo-600 rounded-full flex items-center justify-center text-white shadow-md active:scale-90 transition-transform hover:bg-indigo-700"
+                  >
                     <Send size={20} />
                   </button>
                 </div>
-                <p className="text-center text-xs text-gray-400 font-bold uppercase tracking-widest mt-4">
-                  Modo Planejador Ativo • Pressione Enter para enviar
+                <p className="text-center text-[10px] text-gray-400 font-black uppercase tracking-widest mt-4">
+                  Modo Planejador Ativo • Sessão: Agent Main
                 </p>
               </motion.div>
             )}
@@ -158,12 +174,17 @@ const NavItem = ({ icon, label, active = false, onClick }: NavItemProps) => (
 
 const ChatBubble = ({ sender, message }: { sender: 'agent' | 'user', message: string }) => (
   <motion.div 
-    initial={{ opacity: 0, x: -20 }}
+    initial={{ opacity: 0, x: sender === 'user' ? 20 : -20 }}
     animate={{ opacity: 1, x: 0 }}
-    className={`flex ${sender === 'user' ? 'justify-end' : 'justify-start'}`}
+    className={`flex ${sender === 'user' ? 'justify-end' : 'justify-start'} items-end space-x-3`}
   >
+    {sender === 'agent' && (
+      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 mb-1">
+        <Bot size={18} />
+      </div>
+    )}
     <div className={`max-w-[80%] p-6 rounded-[28px] text-lg font-medium apple-shadow ${
-      sender === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white text-gray-900 rounded-tl-none border border-gray-100'
+      sender === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-gray-900 rounded-bl-none border border-gray-50'
     }`}>
       {message}
     </div>
@@ -176,7 +197,7 @@ const QuickActionCard = ({ title, subtitle, onClick }: { title: string, subtitle
     className="bg-white p-6 rounded-[24px] border border-gray-200 text-left hover:border-indigo-500 hover:apple-shadow-lg transition-all cursor-pointer group active:scale-[0.98]"
   >
     <h4 className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">{title}</h4>
-    <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">{subtitle}</p>
+    <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1">{subtitle}</p>
   </div>
 );
 
