@@ -74,6 +74,15 @@ func (s *Store) migrate() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (project_id) REFERENCES projects(id)
 	);
+
+	CREATE TABLE IF NOT EXISTS project_messages (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		sender TEXT NOT NULL,
+		message TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (project_id) REFERENCES projects(id)
+	);
 	`
 	if _, err := s.DB.Exec(query); err != nil {
 		return err

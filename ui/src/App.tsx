@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, FileText, Target, CheckCircle2 } from 'lucide-react';
 
 interface NavItemProps {
@@ -12,6 +12,7 @@ interface NavItemProps {
 type ChatItem = { sender: 'agent' | 'user'; message: string };
 type Project = { id: string; name: string; manager_status: string; manager_session_key: string };
 type ManagerInfo = { manager_status: string; manager_enabled: boolean; manager_session_key: string; api_calls: number };
+type ProjectMessage = { id: string; sender: 'agent' | 'user'; message: string };
 
 const Dashboard = () => {
   const [view, setView] = useState<'empty' | 'chat'>('empty');
@@ -27,7 +28,8 @@ const Dashboard = () => {
     { sender: 'agent', message: 'Olá! Selecione/crie um projeto e converse com o gestor dedicado.' },
   ]);
 
-  const version = '0.1.5-beta';
+  const version = '0.1.6-beta';
+  const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
 
   const loadProjects = async () => {
@@ -47,9 +49,25 @@ const Dashboard = () => {
   const loadManager = async (projectId: string) => {
     try {
       const res = await fetch(`/api/projects/${projectId}/manager`);
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const data = await res.json();
       setManager(data);
+      return data as ManagerInfo;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadMessages = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/messages`);
+      if (!res.ok) return;
+      const data: ProjectMessage[] = await res.json();
+      if (data.length > 0) {
+        setChatHistory(data.map((m) => ({ sender: m.sender, message: m.message })));
+      } else {
+        setChatHistory([{ sender: 'agent', message: 'Sem histórico ainda. Envie a primeira mensagem para o gestor.' }]);
+      }
     } catch {
       // noop
     }
@@ -60,7 +78,24 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedProjectId) loadManager(selectedProjectId);
+    const bootProject = async () => {
+      if (!selectedProjectId) return;
+      await loadMessages(selectedProjectId);
+      const info = await loadManager(selectedProjectId);
+
+      const needReconnect = info && (info.manager_status === 'offline' || info.manager_status === 'paused');
+      if (needReconnect && !reconnectAttemptedRef.current[selectedProjectId]) {
+        reconnectAttemptedRef.current[selectedProjectId] = true;
+        await fetch(`/api/projects/${selectedProjectId}/manager/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'resume' }),
+        });
+        await loadManager(selectedProjectId);
+        setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Auto-reconnect aplicado no gestor deste projeto.' }]);
+      }
+    };
+    bootProject();
   }, [selectedProjectId]);
 
   const handleStartProject = async () => {
@@ -132,7 +167,10 @@ const Dashboard = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error();
-      setChatHistory((prev) => [...prev, { sender: 'agent', message: data.reply || 'Recebido.' }]);
+      await loadMessages(selectedProjectId);
+      if (!data?.reply) {
+        setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Recebido.' }]);
+      }
       await loadManager(selectedProjectId);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Gestor indisponível no momento.' }]);

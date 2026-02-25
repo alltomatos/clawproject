@@ -35,6 +35,14 @@ type Card struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ProjectMessage struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Sender    string    `json:"sender"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // ProjectRepository define as operaes de banco para projetos
 type ProjectRepository interface {
 	Create(p *Project) error

@@ -125,7 +125,7 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 2 || parts[1] != "manager" {
+	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
 	}
@@ -138,6 +138,21 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 	}
 	if project == nil {
 		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	if parts[1] == "messages" && r.Method == http.MethodGet {
+		messages, err := s.store.ListProjectMessages(r.Context(), projectID, 200)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(messages)
+		return
+	}
+
+	if parts[1] != "manager" {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -189,40 +204,42 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 	}
 
 	s.managerRuntime.mu.Lock()
-	defer s.managerRuntime.mu.Unlock()
-
 	projectID := project.ID
 	if s.managerRuntime.busy[projectID] {
+		s.managerRuntime.mu.Unlock()
 		http.Error(w, "manager busy, try again shortly", http.StatusTooManyRequests)
 		return
 	}
-
 	if last, ok := s.managerRuntime.lastMessage[projectID]; ok {
 		if time.Since(last) < 800*time.Millisecond {
+			s.managerRuntime.mu.Unlock()
 			http.Error(w, "too many requests, slow down", http.StatusTooManyRequests)
 			return
 		}
 	}
-
 	s.managerRuntime.busy[projectID] = true
 	s.managerRuntime.lastMessage[projectID] = time.Now()
 	s.managerRuntime.calls[projectID]++
 	calls := s.managerRuntime.calls[projectID]
-	s.managerRuntime.busy[projectID] = false
+	s.managerRuntime.mu.Unlock()
 
+	_ = s.store.AddProjectMessage(r.Context(), project.ID, "user", req.Message)
+
+	reply := "Integração com sessions_send habilitada para próxima etapa."
+	mode := "openclaw-enabled"
 	if !s.managerEnabled {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"mode":    "local-fallback",
-			"reply":   "Gestor do projeto ativo em modo local (API econômica). Mensagem registrada.",
-			"calls":   calls,
-			"project": project.ID,
-		})
-		return
+		reply = "Gestor do projeto ativo em modo local (API econômica). Mensagem registrada."
+		mode = "local-fallback"
 	}
+	_ = s.store.AddProjectMessage(r.Context(), project.ID, "agent", reply)
+
+	s.managerRuntime.mu.Lock()
+	s.managerRuntime.busy[projectID] = false
+	s.managerRuntime.mu.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"mode":    "openclaw-enabled",
-		"reply":   "Integração com sessions_send habilitada para próxima etapa.",
+		"mode":    mode,
+		"reply":   reply,
 		"calls":   calls,
 		"project": project.ID,
 	})
