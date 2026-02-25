@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -151,6 +152,24 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if parts[1] == "summary" && r.Method == http.MethodGet {
+		summary, err := s.store.GetProjectSummary(r.Context(), projectID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if summary == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"project_id": projectID,
+				"summary":    "Sem resumo ainda. Ele será atualizado automaticamente conforme o andamento.",
+				"version":    0,
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(summary)
+		return
+	}
+
 	if parts[1] != "manager" {
 		http.NotFound(w, r)
 		return
@@ -232,6 +251,7 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 		mode = "local-fallback"
 	}
 	_ = s.store.AddProjectMessage(r.Context(), project.ID, "agent", reply)
+	_ = s.refreshProjectSummary(r.Context(), project.ID)
 
 	s.managerRuntime.mu.Lock()
 	s.managerRuntime.busy[projectID] = false
@@ -293,6 +313,45 @@ func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, pr
 		"manager_session_key": sessionKey,
 		"manager_status":      status,
 	})
+}
+
+func (s *Server) refreshProjectSummary(ctx context.Context, projectID string) error {
+	messages, err := s.store.ListProjectMessages(ctx, projectID, 30)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+
+	var userCount, agentCount int
+	lastUser := ""
+	lastAgent := ""
+	for _, m := range messages {
+		if m.Sender == "user" {
+			userCount++
+			lastUser = m.Message
+		} else {
+			agentCount++
+			lastAgent = m.Message
+		}
+	}
+
+	cut := func(v string) string {
+		v = strings.TrimSpace(v)
+		if len(v) > 220 {
+			return v[:220] + "..."
+		}
+		if v == "" {
+			return "(vazio)"
+		}
+		return v
+	}
+
+	summary := fmt.Sprintf("Resumo automático do projeto\n- Interações: %d (user: %d | gestor: %d)\n- Última solicitação: %s\n- Última resposta do gestor: %s\n- Atualização: %s",
+		len(messages), userCount, agentCount, cut(lastUser), cut(lastAgent), time.Now().Format(time.RFC3339))
+
+	return s.store.UpsertProjectSummary(ctx, projectID, summary)
 }
 
 func sanitizePathName(name string) string {

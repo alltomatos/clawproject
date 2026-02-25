@@ -23,6 +23,7 @@ const Dashboard = () => {
   const [creatingProject, setCreatingProject] = useState(false);
   const [sending, setSending] = useState(false);
   const [controlling, setControlling] = useState(false);
+  const [projectSummary, setProjectSummary] = useState<string>('');
 
   const [chatHistory, setChatHistory] = useState<ChatItem[]>([
     { sender: 'agent', message: 'Olá! Selecione/crie um projeto e converse com o gestor dedicado.' },
@@ -58,6 +59,17 @@ const Dashboard = () => {
     }
   };
 
+  const loadSummary = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/summary`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setProjectSummary(data.summary || '');
+    } catch {
+      // noop
+    }
+  };
+
   const loadMessages = async (projectId: string) => {
     try {
       const res = await fetch(`/api/projects/${projectId}/messages`);
@@ -81,6 +93,7 @@ const Dashboard = () => {
     const bootProject = async () => {
       if (!selectedProjectId) return;
       await loadMessages(selectedProjectId);
+      await loadSummary(selectedProjectId);
       const info = await loadManager(selectedProjectId);
 
       const needReconnect = info && (info.manager_status === 'offline' || info.manager_status === 'paused');
@@ -118,6 +131,7 @@ const Dashboard = () => {
       await loadProjects();
       setSelectedProjectId(created.id);
       await loadManager(created.id);
+      await loadSummary(created.id);
       setChatHistory((prev) => [...prev, { sender: 'agent', message: `Projeto criado. Sessão do gestor: ${created.manager_session_key}` }]);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Falha ao criar projeto agora.' }]);
@@ -140,6 +154,7 @@ const Dashboard = () => {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: `Gestor: ação '${action}' aplicada. Status: ${data.manager_status}` }]);
       await loadProjects();
       await loadManager(selectedProjectId);
+      await loadSummary(selectedProjectId);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: `Falha ao executar '${action}' no gestor.` }]);
     } finally {
@@ -172,6 +187,7 @@ const Dashboard = () => {
         setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Recebido.' }]);
       }
       await loadManager(selectedProjectId);
+      await loadSummary(selectedProjectId);
     } catch {
       setChatHistory((prev) => [...prev, { sender: 'agent', message: 'Gestor indisponível no momento.' }]);
     } finally {
@@ -264,6 +280,10 @@ const Dashboard = () => {
               <motion.div key="chat" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="h-full flex flex-col p-8 max-w-4xl mx-auto">
                 <div className="mb-3 text-xs text-slate-500 font-semibold">
                   Projeto: {selectedProject?.name || selectedProject?.id || 'não selecionado'} • Sessão gestor: {manager?.manager_session_key || selectedProject?.manager_session_key || '-'}
+                </div>
+                <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Contexto sumarizado do projeto</div>
+                  <div className="text-xs text-slate-700 whitespace-pre-wrap">{projectSummary || 'Sem resumo ainda.'}</div>
                 </div>
 
                 <div className="mb-4 flex gap-2">
