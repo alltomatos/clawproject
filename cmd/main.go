@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/alltomatos/clawproject/internal/agent"
 	"github.com/alltomatos/clawproject/internal/api"
 	"github.com/alltomatos/clawproject/internal/core"
 	"github.com/alltomatos/clawproject/internal/db"
@@ -17,7 +16,7 @@ import (
 var uiAssets embed.FS
 
 func main() {
-	fmt.Println("🦞 ClawFlow - Gerenciador de Projetos Agent-Native")
+	fmt.Println("🦞 ClawProject - Gerenciador de Projetos Agent-Native")
 
 	// 1. Carregar Config do OpenClaw
 	cfg, err := core.LoadConfig()
@@ -34,19 +33,11 @@ func main() {
 	fmt.Println("Banco de dados SQLite pronto!")
 	defer store.DB.Close()
 
-	// 3. Conectar ao Gateway como Operador (Background)
-	client := agent.NewClient(cfg)
-	go func() {
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Aviso: Falha na conexão agentica: %v\n", err)
-		}
-	}()
-
-	// 4. Inicializar APIs
+	// 3. Inicializar APIs
 	apiServer := api.NewServer(store)
 	apiServer.RegisterHandlers()
 
-	// 5. Servir Frontend Embutido
+	// 4. Servir Frontend Embutido
 	distFS, _ := fs.Sub(uiAssets, "ui")
 	
 	http.Handle("/", http.FileServer(http.FS(distFS)))
