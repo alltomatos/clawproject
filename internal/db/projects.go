@@ -8,17 +8,19 @@ import (
 )
 
 func (s *Store) CreateProject(ctx context.Context, p *core.Project) error {
-	query := `INSERT INTO projects (id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, created_at)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO projects (id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, leader_name, leader_email, location, vibe, project_type, created_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.DB.ExecContext(ctx, query,
 		p.ID, p.Name, p.Description, p.Path, p.GitURL, p.Status,
-		p.ManagerSessionKey, p.ManagerAgentID, p.ManagerStatus, p.CreatedAt,
+		p.ManagerSessionKey, p.ManagerAgentID, p.ManagerStatus, 
+		p.LeaderName, p.LeaderEmail, p.Location, p.Vibe, p.ProjectType,
+		p.CreatedAt,
 	)
 	return err
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]*core.Project, error) {
-	query := `SELECT id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, created_at FROM projects ORDER BY created_at DESC`
+	query := `SELECT id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, leader_name, leader_email, location, vibe, project_type, created_at FROM projects ORDER BY created_at DESC`
 	rows, err := s.DB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -28,7 +30,12 @@ func (s *Store) ListProjects(ctx context.Context) ([]*core.Project, error) {
 	var projects []*core.Project
 	for rows.Next() {
 		p := &core.Project{}
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Path, &p.GitURL, &p.Status, &p.ManagerSessionKey, &p.ManagerAgentID, &p.ManagerStatus, &p.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&p.ID, &p.Name, &p.Description, &p.Path, &p.GitURL, &p.Status, 
+			&p.ManagerSessionKey, &p.ManagerAgentID, &p.ManagerStatus,
+			&p.LeaderName, &p.LeaderEmail, &p.Location, &p.Vibe, &p.ProjectType,
+			&p.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -37,11 +44,13 @@ func (s *Store) ListProjects(ctx context.Context) ([]*core.Project, error) {
 }
 
 func (s *Store) GetProjectByID(ctx context.Context, id string) (*core.Project, error) {
-	query := `SELECT id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, created_at FROM projects WHERE id = ? LIMIT 1`
+	query := `SELECT id, name, description, path, git_url, status, manager_session_key, manager_agent_id, manager_status, leader_name, leader_email, location, vibe, project_type, created_at FROM projects WHERE id = ? LIMIT 1`
 	p := &core.Project{}
 	err := s.DB.QueryRowContext(ctx, query, id).Scan(
 		&p.ID, &p.Name, &p.Description, &p.Path, &p.GitURL, &p.Status,
-		&p.ManagerSessionKey, &p.ManagerAgentID, &p.ManagerStatus, &p.CreatedAt,
+		&p.ManagerSessionKey, &p.ManagerAgentID, &p.ManagerStatus,
+		&p.LeaderName, &p.LeaderEmail, &p.Location, &p.Vibe, &p.ProjectType,
+		&p.CreatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

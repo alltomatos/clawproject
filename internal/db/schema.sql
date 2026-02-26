@@ -8,6 +8,14 @@ CREATE TABLE IF NOT EXISTS projects (
     path TEXT NOT NULL,          -- Caminho absoluto no workspace
     git_url TEXT,
     status TEXT DEFAULT 'active', -- active, archived, completed
+    manager_session_key TEXT,
+    manager_agent_id TEXT,
+    manager_status TEXT,
+    leader_name TEXT,
+    leader_email TEXT,
+    location TEXT,
+    vibe TEXT,
+    project_type TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

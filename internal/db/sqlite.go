@@ -52,6 +52,11 @@ func (s *Store) migrate() error {
 		manager_session_key TEXT,
 		manager_agent_id TEXT DEFAULT 'main',
 		manager_status TEXT DEFAULT 'offline',
+		leader_name TEXT,
+		leader_email TEXT,
+		location TEXT,
+		vibe TEXT,
+		project_type TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -131,6 +136,21 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if err := s.ensureColumn("projects", "manager_status", "TEXT DEFAULT 'offline'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "leader_name", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "leader_email", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "location", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "vibe", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "project_type", "TEXT"); err != nil {
 		return err
 	}
 

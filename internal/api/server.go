@@ -2,15 +2,12 @@ package api
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +30,23 @@ type managerRuntime struct {
 	lastWarmup   map[string]time.Time
 	calls        map[string]int
 	busy         map[string]bool
+}
+
+type managerMessageRequest struct {
+	Message string `json:"message"`
+}
+
+type managerControlRequest struct {
+	Action string `json:"action"`
+}
+
+type openclawAgentResult struct {
+	Status string `json:"status"`
+	Result struct {
+		Payloads []struct {
+			Text string `json:"text"`
+		} `json:"payloads"`
+	} `json:"result"`
 }
 
 func NewServer(store *db.Store) *Server {
@@ -97,7 +111,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		p.ID = uuid.New().String()
 		p.CreatedAt = time.Now()
 		p.Status = "active"
-		p.ManagerAgentID = sanitizePathName(p.Name) // Subagente com nome do projeto
+		p.ManagerAgentID = sanitizePathName(p.Name)
 		p.ManagerStatus = "offline"
 
 		if p.Path == "" {
@@ -109,12 +123,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if p.ManagerSessionKey == "" {
+			p.ManagerSessionKey = "main" 
 			if s.managerEnabled {
-				p.ManagerSessionKey = fmt.Sprintf("pm-%s", p.ID)
 				p.ManagerStatus = "active"
-			} else {
-				p.ManagerSessionKey = fmt.Sprintf("local-pm-%s", p.ID)
-				p.ManagerStatus = "offline"
 			}
 		}
 
@@ -123,33 +134,36 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Criação automática do agente no OpenClaw se não for 'main'
 		if p.ManagerAgentID != "main" {
-			go func(agentID, agentName, workspace string) {
-				fmt.Printf("[bridge] provisioning agent name=%s workspace=%s\n", agentName, workspace)
+			go func(agentID, agentName, workspace string, p core.Project) {
 				absWorkspace, _ := filepath.Abs(workspace)
+				_ = exec.Command("openclaw", "agents", "add", agentID, "--workspace", absWorkspace, "--non-interactive").Run()
 				
-				// 1. Adiciona o agente
-				cmdAdd := exec.Command("openclaw", "agents", "add", agentID, "--workspace", absWorkspace, "--non-interactive")
-				out, err := cmdAdd.CombinedOutput()
-				if err != nil {
-					fmt.Printf("[bridge] failed to add agent: %v | out: %s\n", err, string(out))
-				} else {
-					fmt.Printf("[bridge] agent added successfully\n")
+				// DIRETRIZ MASTER DO SUBAGENTE - Definida como instrução de base (system prompt) via CLI
+				soulInstructions := fmt.Sprintf(`Você é o Gestor deste projeto. 
+Identidade: %s.
+Líder do Projeto: %s (%s).
+Localização: %s.
+Tipo de Projeto: %s.
+Objetivo: %s.
+
+Diretrizes:
+1. Sua Bíblia reside em docs/. SEMPRE consulte docs/ antes de agir.
+2. Quebre o objetivo em um ROADMAP.md em docs/.
+3. Para cada item do Roadmap, crie um card no pipeline.
+4. Reporte-se ao %s de forma %s.`, 
+					p.Vibe, p.LeaderName, p.LeaderEmail, p.Location, p.ProjectType, p.Description, p.LeaderName, p.Vibe)
+				
+				if p.ProjectType == "existing" && p.GitURL != "" {
+					soulInstructions += "\n\nIMPORTANTE: Este é um projeto existente. Sua primeira tarefa é analisar o repositório GIT: " + p.GitURL
+					// Clone em background (exemplo simplificado)
+					_ = exec.Command("git", "clone", p.GitURL, absWorkspace).Run()
 				}
 
-				// 2. Define a identidade padrão (opcional, para não ficar 'Assistant')
-				cmdId := exec.Command("openclaw", "agents", "set-identity", "--agent", agentID, "--name", "Gestor "+agentName, "--emoji", "🦞")
-				_ = cmdId.Run()
-
-				// 3. Define o modelo padrão (evita herdar falhas se o main estiver em cooldown)
-				// Tenta forçar o gemini-3-flash que é mais estável para triagem
-				cmdModel := exec.Command("openclaw", "config", "set", fmt.Sprintf("agents.models.%s.model", agentID), "google-antigravity/gemini-3-flash")
-				_ = cmdModel.Run()
-				
-				// 4. Garante que o gateway receba a nova configuração
+				_ = exec.Command("openclaw", "agents", "set-identity", "--agent", agentID, "--name", "Gestor "+agentName, "--emoji", "🦞", "--theme", soulInstructions).Run()
+				_ = exec.Command("openclaw", "config", "set", fmt.Sprintf("agents.models.%s.model", agentID), "google-antigravity/gemini-3-flash").Run()
 				_ = exec.Command("openclaw", "gateway", "restart").Run()
-			}(p.ManagerAgentID, p.Name, p.Path)
+			}(p.ManagerAgentID, p.Name, p.Path, p)
 		}
 
 		if err := s.store.CreateProject(r.Context(), &p); err != nil {
@@ -201,11 +215,7 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if summary == nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"project_id": projectID,
-				"summary":    "Sem resumo ainda. Ele será atualizado automaticamente conforme o andamento.",
-				"version":    0,
-			})
+			json.NewEncoder(w).Encode(map[string]interface{}{ "project_id": projectID, "summary": "Sem resumo.", "version": 0 })
 			return
 		}
 		json.NewEncoder(w).Encode(summary)
@@ -214,35 +224,22 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 
 	if parts[1] == "planner" && r.Method == http.MethodGet {
 		st, _ := s.store.GetPlannerState(r.Context(), projectID)
-		niche := ""
-		stage := "triage_type"
-		projectType := ""
+		niche, stage, projectType := "", "triage_type", ""
 		if st != nil {
-			niche = st.Niche
-			stage = st.Stage
-			projectType = st.ProjectType
+			niche, stage, projectType = st.Niche, st.Stage, st.ProjectType
 		}
 		deliverables := expectedDeliverablesForNiche(niche)
 		docsDir := filepath.Join(project.Path, "docs")
 		existing := []string{}
 		for _, f := range deliverables {
-			if _, err := os.Stat(filepath.Join(docsDir, f)); err == nil {
-				existing = append(existing, f)
-			}
+			if _, err := os.Stat(filepath.Join(docsDir, f)); err == nil { existing = append(existing, f) }
 		}
 		lastCheckpoint := ""
 		cmd := exec.Command("git", "-C", project.Path, "log", "--oneline", "-n", "1", "--", "docs")
-		if out, err := cmd.CombinedOutput(); err == nil {
-			lastCheckpoint = strings.TrimSpace(string(out))
-		}
+		if out, err := cmd.CombinedOutput(); err == nil { lastCheckpoint = strings.TrimSpace(string(out)) }
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"project_id":       projectID,
-			"stage":            stage,
-			"project_type":     projectType,
-			"niche":            niche,
-			"deliverables":     deliverables,
-			"deliverables_done": existing,
-			"last_checkpoint":  lastCheckpoint,
+			"project_id": projectID, "stage": stage, "project_type": projectType, "niche": niche,
+			"deliverables": deliverables, "deliverables_done": existing, "last_checkpoint": lastCheckpoint,
 		})
 		return
 	}
@@ -258,13 +255,9 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		s.managerRuntime.mu.Unlock()
 		dailyCalls, _ := s.store.GetDailyManagerUsage(r.Context(), projectID, time.Now().Format("2006-01-02"))
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"project_id":          project.ID,
-			"manager_session_key": project.ManagerSessionKey,
-			"manager_agent_id":    project.ManagerAgentID,
-			"manager_status":      project.ManagerStatus,
-			"manager_enabled":     s.managerEnabled,
-			"api_calls":           calls,
-			"daily_calls":         dailyCalls,
+			"project_id": project.ID, "manager_session_key": project.ManagerSessionKey,
+			"manager_agent_id": project.ManagerAgentID, "manager_status": project.ManagerStatus,
+			"manager_enabled": s.managerEnabled, "api_calls": calls, "daily_calls": dailyCalls,
 		})
 		return
 	}
@@ -279,24 +272,7 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if len(parts) == 3 && parts[2] == "profile" {
-		s.handleManagerProfile(w, r, project)
-		return
-	}
-
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-}
-
-type managerMessageRequest struct {
-	Message string `json:"message"`
-}
-
-type managerControlRequest struct {
-	Action string `json:"action"`
-}
-
-type managerProfileRequest struct {
-	Instructions string `json:"instructions"`
 }
 
 func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, project *core.Project) {
@@ -311,77 +287,39 @@ func (s *Server) handleManagerMessage(w http.ResponseWriter, r *http.Request, pr
 	}
 
 	s.managerRuntime.mu.Lock()
-	projectID := project.ID
-	if s.managerRuntime.busy[projectID] {
+	if s.managerRuntime.busy[project.ID] {
 		s.managerRuntime.mu.Unlock()
-		http.Error(w, "manager busy, try again shortly", http.StatusTooManyRequests)
+		http.Error(w, "manager busy", http.StatusTooManyRequests)
 		return
 	}
-	if last, ok := s.managerRuntime.lastMessage[projectID]; ok {
-		if time.Since(last) < 800*time.Millisecond {
-			s.managerRuntime.mu.Unlock()
-			http.Error(w, "too many requests, slow down", http.StatusTooManyRequests)
-			return
-		}
-	}
-	s.managerRuntime.busy[projectID] = true
-	s.managerRuntime.lastMessage[projectID] = time.Now()
-	s.managerRuntime.calls[projectID]++
-	calls := s.managerRuntime.calls[projectID]
+	s.managerRuntime.busy[project.ID] = true
 	s.managerRuntime.mu.Unlock()
-
-	dailyLimit := resolveDailyManagerLimit()
-	today := time.Now().Format("2006-01-02")
-	dailyCalls, err := s.store.GetDailyManagerUsage(r.Context(), project.ID, today)
-	if err == nil && dailyCalls >= dailyLimit {
+	defer func() {
 		s.managerRuntime.mu.Lock()
-		s.managerRuntime.busy[projectID] = false
+		s.managerRuntime.busy[project.ID] = false
 		s.managerRuntime.mu.Unlock()
-		http.Error(w, fmt.Sprintf("daily manager limit reached (%d/%d)", dailyCalls, dailyLimit), http.StatusTooManyRequests)
-		return
-	}
-	if _, err := s.store.IncrementDailyManagerUsage(r.Context(), project.ID, today); err != nil {
-		s.managerRuntime.mu.Lock()
-		s.managerRuntime.busy[projectID] = false
-		s.managerRuntime.mu.Unlock()
-		http.Error(w, "failed to register manager usage", http.StatusInternalServerError)
-		return
-	}
+	}()
 
 	_ = s.store.AddProjectMessage(r.Context(), project.ID, "user", req.Message)
 
 	reply := ""
-	mode := "local-fallback"
 	if s.managerEnabled {
-		mode = "openclaw-bridge"
 		bridgeReply, err := s.runOpenClawManagerTurn(project, req.Message)
 		if err != nil {
-			mode = "bridge-error"
-			fmt.Printf("[bridge] error project=%s reason=%v\n", project.ID, err)
-			reply = fmt.Sprintf("Erro no Gestor OpenClaw: %v\n\nPor favor, verifique os logs do gateway ou tente novamente.", err)
+			reply = fmt.Sprintf("Erro no Gestor OpenClaw: %v", err)
 		} else {
 			reply = bridgeReply
-			// Se a resposta contém o marcador do bot (emoji ou nome), limpamos para o JSON ser válido na UI
-			// ou garantimos que o runOpenClawManagerTurn saiba lidar com isso.
 			_ = s.advancePlannerFromMessage(r.Context(), project, req.Message)
 		}
 	} else {
 		reply, _ = s.nextPlannerReply(r.Context(), project, req.Message)
 	}
+
 	_ = s.store.AddProjectMessage(r.Context(), project.ID, "agent", reply)
 	_ = s.refreshProjectSummary(r.Context(), project.ID)
 	_ = s.syncIncrementalDeliverables(r.Context(), project, req.Message, reply)
 
-	s.managerRuntime.mu.Lock()
-	s.managerRuntime.busy[projectID] = false
-	s.managerRuntime.mu.Unlock()
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"mode":    mode,
-		"reply":   reply,
-		"calls":   calls,
-		"project": project.ID,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{ "reply": reply, "project": project.ID })
 }
 
 func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, project *core.Project) {
@@ -391,31 +329,26 @@ func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
-	if action == "" {
-		http.Error(w, "action is required", http.StatusBadRequest)
-		return
-	}
-
-	sessionKey := project.ManagerSessionKey
-	agentID := project.ManagerAgentID
-	status := project.ManagerStatus
+	sessionKey, agentID, status := project.ManagerSessionKey, project.ManagerAgentID, project.ManagerStatus
 
 	switch action {
-	case "pause":
-		status = "paused"
-	case "resume":
-		if s.managerEnabled {
-			status = "active"
-		} else {
-			status = "offline"
+	case "pause": status = "paused"
+	case "resume": status = "active"
+	case "restart": 
+		sessionKey = "main"
+		status = "active"
+	case "start-execution":
+		// Envia diretriz master e salva a resposta NO CHAT do ClawProject
+		directive := "ESTADO: Triagem concluída. DIRETRIZ MASTER ATIVADA: Você é o Gestor deste projeto. Sua Bíblia reside em docs/. Regra #1: SEMPRE consulte docs/ antes de agir. Regra #2: Quebre o objetivo em um ROADMAP.md em docs/. Regra #3: Para cada item do Roadmap, crie um card no pipeline. Seja pragmático. Confirme que entendeu lendo docs/."
+		reply, err := s.runOpenClawManagerTurn(project, directive)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("erro ao iniciar execução: %v", err), http.StatusInternalServerError)
+			return
 		}
-	case "restart":
-		sessionKey = fmt.Sprintf("pm-%s-%d", project.ID, time.Now().Unix())
-		if s.managerEnabled {
-			status = "active"
-		} else {
-			status = "offline"
-		}
+		_ = s.store.AddProjectMessage(r.Context(), project.ID, "agent", reply)
+		_ = s.refreshProjectSummary(r.Context(), project.ID)
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Diretrizes enviadas ao gestor.", "reply": reply})
+		return
 	default:
 		http.Error(w, "invalid action", http.StatusBadRequest)
 		return
@@ -425,101 +358,59 @@ func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if action == "restart" && s.managerEnabled { go s.warmupManagerSession(project.ID, sessionKey, agentID) }
 
-	if action == "restart" && s.managerEnabled {
-		go s.warmupManagerSession(project.ID, sessionKey, agentID)
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":                  true,
-		"action":              action,
-		"manager_session_key": sessionKey,
-		"manager_status":      status,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{ "ok": true, "manager_session_key": sessionKey, "manager_status": status })
 }
 
-func (s *Server) handleManagerProfile(w http.ResponseWriter, r *http.Request, project *core.Project) {
-	if r.Method == http.MethodGet {
-		profile, err := s.store.GetManagerProfile(r.Context(), project.ID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+func (s *Server) runOpenClawManagerTurn(project *core.Project, userMessage string) (string, error) {
+	agentID := strings.TrimSpace(project.ManagerAgentID)
+	if agentID == "" { agentID = "main" }
+	sessionID := "main"
+
+	// AGORA ENVIAMOS APENAS A MENSAGEM PURA, SEM INJEÇÃO DE CONTEXTO OCULTA EM CADA TURNO
+	cmd := exec.Command("openclaw", "agent", "--agent", agentID, "--session-id", sessionID, "--message", userMessage, "--json", "--timeout", "90", "--verbose", "off")
+	
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	outStr := stdout.String()
+	
+	if err != nil { return "", fmt.Errorf("openclaw failed: %v | %s", err, stderr.String()) }
+	
+	var parsed openclawAgentResult
+	start, end := strings.Index(outStr, "{"), strings.LastIndex(outStr, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(outStr[start:end+1]), &parsed); err != nil {
+			return strings.TrimSpace(outStr), nil
 		}
-		json.NewEncoder(w).Encode(profile)
-		return
+	} else {
+		return strings.TrimSpace(outStr), nil
 	}
-	if r.Method == http.MethodPost {
-		var req managerProfileRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := s.store.UpsertManagerProfile(r.Context(), project.ID, strings.TrimSpace(req.Instructions)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		return
+	
+	if len(parsed.Result.Payloads) > 0 && strings.TrimSpace(parsed.Result.Payloads[0].Text) != "" {
+		return parsed.Result.Payloads[0].Text, nil
 	}
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return "Processado.", nil
 }
 
 func (s *Server) nextPlannerReply(ctx context.Context, project *core.Project, userMessage string) (string, string) {
 	st, _ := s.store.GetPlannerState(ctx, project.ID)
-	if st == nil {
-		st = &db.PlannerState{ProjectID: project.ID, Stage: "triage_type"}
-	}
-
+	if st == nil { st = &db.PlannerState{ProjectID: project.ID, Stage: "triage_type"} }
 	msg := strings.ToLower(strings.TrimSpace(userMessage))
-	normalized := strings.Join(strings.Fields(msg), " ")
-
 	reply := "Recebido."
 	switch st.Stage {
 	case "triage_type":
-		if strings.Contains(normalized, "novo") {
-			st.ProjectType = "novo"
-			st.Stage = "triage_niche"
-			reply = "Perfeito. Projeto Novo confirmado. Qual o nicho principal? (software, conteúdo, prospecção/vendas, gestão/operacional)"
-		} else if strings.Contains(normalized, "existente") {
-			st.ProjectType = "existente"
-			st.Stage = "triage_niche"
-			reply = "Perfeito. Projeto Existente confirmado. Qual o nicho principal para engenharia reversa? (software, conteúdo, prospecção/vendas, gestão/operacional)"
-		} else {
-			reply = "Para iniciar a triagem: este projeto é Novo ou Existente?"
-		}
+		if strings.Contains(msg, "novo") { st.ProjectType, st.Stage, reply = "novo", "triage_niche", "Qual o nicho principal?" } else { reply = "Este projeto é Novo ou Existente?" }
 	case "triage_niche":
-		st.Niche = detectNiche(normalized)
-		if st.Niche == "" {
-			reply = "Me diga o nicho principal: software, conteúdo, prospecção/vendas, gestão ou operacional."
-		} else {
-			st.Stage = "objective"
-			reply = fmt.Sprintf("Nicho '%s' definido. Agora descreva o objetivo principal em 1-2 frases.", st.Niche)
-		}
+		st.Niche = detectNiche(msg)
+		if st.Niche != "" { st.Stage, reply = "objective", fmt.Sprintf("Nicho '%s' definido. Qual o objetivo principal?", st.Niche) }
 	case "objective":
-		st.Objective = strings.TrimSpace(userMessage)
-		st.Stage = "deliverables"
-		reply = "Objetivo registrado. Quais entregáveis imediatos você espera nesta fase (MVP/plano/checklists/scripts/docs)?"
+		st.Objective, st.Stage, reply = userMessage, "deliverables", "Objetivo registrado. Quais os entregáveis esperados?"
 	case "deliverables":
-		st.Deliverables = strings.TrimSpace(userMessage)
-		if requiresVisualChecklist(st) {
-			st.Stage = "visual_checklist"
-			_ = s.ensureVisualChecklistDoc(project)
-			reply = "Antes de concluir a triagem: valide o padrão visual. Responda 'checklist visual ok' após revisar o `docs/UI_CHECKLIST.md` (layout, estados, consistência, acessibilidade, responsividade)."
-		} else {
-			st.Stage = "active"
-			reply = "Excelente. Triagem concluída. Vou manter o PLANNING.md atualizado conforme o avanço do projeto."
-		}
-	case "visual_checklist":
-		if confirmsVisualChecklist(userMessage) {
-			st.Stage = "active"
-			reply = "Checklist visual confirmado. Triagem concluída e projeto liberado para execução."
-		} else {
-			reply = "Validação visual pendente. Revise `docs/UI_CHECKLIST.md` e confirme com: checklist visual ok."
-		}
-	default:
-		reply = "Contexto recebido. Vou atualizar os marcos e próximos passos no PLANNING.md."
+		st.Deliverables, st.Stage, reply = userMessage, "active", "Triagem finalizada. Use o painel lateral para ver os docs e inicie a execução quando pronto."
+	default: reply = "Contexto recebido."
 	}
-
 	_ = s.store.UpsertPlannerState(ctx, st)
 	_ = s.updatePlanningFromState(project, st)
 	return reply, "local"
@@ -530,516 +421,54 @@ func (s *Server) advancePlannerFromMessage(ctx context.Context, project *core.Pr
 	return nil
 }
 
-type openclawAgentResult struct {
-	Status string `json:"status"`
-	Result struct {
-		Payloads []struct {
-			Text string `json:"text"`
-		} `json:"payloads"`
-	} `json:"result"`
-}
-
-func (s *Server) warmupManagerSession(projectID, sessionID, agentID string) {
-	s.managerRuntime.mu.Lock()
-	if last, ok := s.managerRuntime.lastWarmup[projectID]; ok {
-		if time.Since(last) < 15*time.Second {
-			s.managerRuntime.mu.Unlock()
-			fmt.Printf("[bridge] warmup skipped project=%s (cooldown active)\n", projectID)
-			return
-		}
-	}
-	s.managerRuntime.lastWarmup[projectID] = time.Now()
-	s.managerRuntime.mu.Unlock()
-
-	msg := "Inicie a sessão do gestor deste projeto. Responda apenas: GESTOR_PRONTO."
-	cmd := exec.Command("openclaw", "agent", "--agent", agentID, "--session-id", sessionID, "--message", msg, "--json", "--timeout", "30")
-	_ = cmd.Run()
-	_ = s.store.AddProjectMessage(context.Background(), projectID, "agent", "[manager-restart] sessão reinicializada")
-}
-
-func (s *Server) runOpenClawManagerTurn(project *core.Project, userMessage string) (string, error) {
-	if project == nil {
-		return "", fmt.Errorf("project nil")
-	}
-	
-	agentID := strings.TrimSpace(project.ManagerAgentID)
-	if agentID == "" {
-		agentID = "main"
-	}
-	
-	// O Dashboard do OpenClaw CLI usa 'main' como ID de sessão padrão para chats diretos.
-	// Forçando 'main' aqui para alinhar o CLI e o Dashboard no mesmo histórico.
-	sessionID := "main"
-	
-	cmd := exec.Command("openclaw", "agent", "--agent", agentID, "--session-id", sessionID, "--message", userMessage, "--json", "--timeout", "90", "--verbose", "off")
-	
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	outStr := stdout.String()
-	
-	fmt.Printf("[bridge] project=%s agent=%s session=%s out_len=%d err=%v\n", project.ID, agentID, sessionID, len(outStr), err)
-	
-	if err != nil {
-		if strings.Contains(outStr, "{") {
-			var parsedErr openclawAgentResult
-			start := strings.Index(outStr, "{")
-			end := strings.LastIndex(outStr, "}")
-			if start >= 0 && end > start {
-				if errJ := json.Unmarshal([]byte(outStr[start:end+1]), &parsedErr); errJ == nil {
-					if len(parsedErr.Result.Payloads) > 0 {
-						return parsedErr.Result.Payloads[0].Text, nil
-					}
-				}
-			}
-		}
-		return "", fmt.Errorf("openclaw agent failed: %v | %s", err, strings.TrimSpace(stderr.String()))
-	}
-	
-	var parsed openclawAgentResult
-	start := strings.Index(outStr, "{")
-	end := strings.LastIndex(outStr, "}")
-	if start >= 0 && end > start {
-		jsonStr := outStr[start : end+1]
-		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-			if len(strings.TrimSpace(outStr)) > 10 {
-				return strings.TrimSpace(outStr), nil
-			}
-			return "", fmt.Errorf("parse agent json failed: %v | raw: %s", err, outStr)
-		}
-	} else {
-		if len(strings.TrimSpace(outStr)) > 0 {
-			return strings.TrimSpace(outStr), nil
-		}
-		return "", fmt.Errorf("no response found in agent output | raw: %s", outStr)
-	}
-	
-	if len(parsed.Result.Payloads) == 0 || strings.TrimSpace(parsed.Result.Payloads[0].Text) == "" {
-		if len(strings.TrimSpace(outStr)) > 20 {
-			return "Ação executada com sucesso.", nil
-		}
-		return "Sem resposta textual.", nil
-	}
-	return parsed.Result.Payloads[0].Text, nil
-}
-
 func (s *Server) ensureProjectWorkspace(p *core.Project) error {
-	if p == nil {
-		return fmt.Errorf("project is nil")
-	}
 	root := filepath.Clean(p.Path)
 	docsDir := filepath.Join(root, "docs")
-	if err := os.MkdirAll(docsDir, 0755); err != nil {
-		return fmt.Errorf("falha ao criar estrutura do projeto: %w", err)
-	}
-
+	_ = os.MkdirAll(docsDir, 0755)
 	planningPath := filepath.Join(docsDir, "PLANNING.md")
-	if _, err := os.Stat(planningPath); err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		bootstrap := fmt.Sprintf("# PLANNING.md\n\nProjeto: %s\n\n## Triagem Inicial\n- Tipo: pendente (Novo/Existente)\n- Nicho: pendente\n\n## Objetivo\n- Definir objetivo principal\n\n## Entregáveis\n- docs/PLANNING.md (este arquivo)\n- PRD/DER/POPs conforme nicho\n\n## Próximos passos\n- Conduzir triagem no chat com o gestor dedicado.\n", p.Name)
-		if err := os.WriteFile(planningPath, []byte(bootstrap), 0644); err != nil {
-			return fmt.Errorf("falha ao criar PLANNING.md: %w", err)
-		}
+	if _, err := os.Stat(planningPath); os.IsNotExist(err) {
+		_ = os.WriteFile(planningPath, []byte("# PLANNING.md\n\nProjeto: "+p.Name+"\n"), 0644)
 	}
-
-	if _, err := os.Stat(filepath.Join(root, ".git")); os.IsNotExist(err) {
-		_ = exec.Command("git", "-C", root, "init").Run()
-	}
-
+	if _, err := os.Stat(filepath.Join(root, ".git")); os.IsNotExist(err) { _ = exec.Command("git", "-C", root, "init").Run() }
 	return nil
 }
 
 func detectNiche(msg string) string {
-	switch {
-	case strings.Contains(msg, "software"), strings.Contains(msg, "sistema"), strings.Contains(msg, "api"):
-		return "software"
-	case strings.Contains(msg, "conteúdo"), strings.Contains(msg, "conteudo"), strings.Contains(msg, "editorial"):
-		return "conteudo"
-	case strings.Contains(msg, "prospec"), strings.Contains(msg, "vendas"), strings.Contains(msg, "funil"):
-		return "prospeccao"
-	case strings.Contains(msg, "gest"):
-		return "gestao"
-	case strings.Contains(msg, "operac"), strings.Contains(msg, "checklist"), strings.Contains(msg, "invent"):
-		return "operacional"
-	default:
-		return ""
-	}
+	if strings.Contains(msg, "soft") { return "software" }
+	if strings.Contains(msg, "cont") { return "conteudo" }
+	return "geral"
 }
 
-func expectedDeliverablesForNiche(niche string) []string {
-	switch strings.ToLower(strings.TrimSpace(niche)) {
-	case "software":
-		return []string{"PLANNING.md", "PRD.md", "DER.md", "POPS.md", "UI_CHECKLIST.md"}
-	case "prospeccao":
-		return []string{"PLANNING.md", "FUNIL.md", "SCRIPT_ABORDAGEM.md", "METRICAS.md"}
-	case "conteudo", "conteúdo":
-		return []string{"PLANNING.md", "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md", "UI_CHECKLIST.md"}
-	case "gestao", "gestão", "operacional":
-		return []string{"PLANNING.md", "PLANO_ACAO.md", "CHECKLISTS.md", "POPS.md"}
-	default:
-		return []string{"PLANNING.md", "ENTREGAVEIS.md"}
-	}
-}
-
-func requiresVisualChecklist(st *db.PlannerState) bool {
-	if st == nil {
-		return false
-	}
-	n := strings.ToLower(strings.TrimSpace(st.Niche))
-	return n == "software" || n == "conteudo" || n == "conteúdo"
-}
-
-func confirmsVisualChecklist(msg string) bool {
-	m := strings.ToLower(strings.TrimSpace(msg))
-	return strings.Contains(m, "checklist visual ok") || strings.Contains(m, "padrão visual ok") || strings.Contains(m, "padrao visual ok")
-}
+func expectedDeliverablesForNiche(niche string) []string { return []string{"PLANNING.md", "ROADMAP.md", "ENTREGAVEIS.md"} }
 
 func (s *Server) updatePlanningFromState(project *core.Project, st *db.PlannerState) error {
-	if project == nil || st == nil {
-		return nil
-	}
-	planningPath := filepath.Join(project.Path, "docs", "PLANNING.md")
-	base := fmt.Sprintf("# PLANNING.md\n\nProjeto: %s\n\n## Triagem Inicial\n- Tipo: %s\n- Nicho: %s\n- Etapa: %s\n\n## Objetivo\n%s\n\n## Entregáveis\n%s\n\n## Próximos passos\n- Continuar execução pelo chat do gestor dedicado.\n- Atualizar este documento a cada marco relevante.\n", project.Name, emptyOrPending(st.ProjectType), emptyOrPending(st.Niche), st.Stage, emptyOrPending(st.Objective), emptyOrPending(st.Deliverables))
-	if err := os.WriteFile(planningPath, []byte(base), 0644); err != nil {
-		return err
-	}
-	if st.Stage == "active" {
-		_ = s.ensureNicheDeliverables(project, st)
-	}
-	return nil
-}
-
-func emptyOrPending(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return "pendente"
-	}
-	return v
-}
-
-func (s *Server) ensureVisualChecklistDoc(project *core.Project) error {
-	if project == nil {
-		return nil
-	}
-	path := filepath.Join(project.Path, "docs", "UI_CHECKLIST.md")
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
-	content := "# UI_CHECKLIST.md\n\n## Validação obrigatória de padrão visual\n- [ ] Layout consistente (header/sidebar/cards)\n- [ ] Estados de loading/empty/error/success\n- [ ] Grid/tabela com padrão único quando aplicável\n- [ ] Acessibilidade mínima (contraste/foco/labels)\n- [ ] Responsividade\n- [ ] Sem variações visuais desnecessárias\n"
+	path := filepath.Join(project.Path, "docs", "PLANNING.md")
+	content := fmt.Sprintf("# PLANNING.md\n\nNicho: %s\nEtapa: %s\nObjetivo: %s\n", st.Niche, st.Stage, st.Objective)
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-func (s *Server) ensureNicheDeliverables(project *core.Project, st *db.PlannerState) error {
-	docsDir := filepath.Join(project.Path, "docs")
-	_ = os.MkdirAll(docsDir, 0755)
-
-	writeIfMissing := func(name, content string) {
-		path := filepath.Join(docsDir, name)
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		_ = os.WriteFile(path, []byte(content), 0644)
-	}
-
-	objective := emptyOrPending(st.Objective)
-	deliverables := emptyOrPending(st.Deliverables)
-	niche := strings.ToLower(strings.TrimSpace(st.Niche))
-
-	switch niche {
-	case "software":
-		writeIfMissing("PRD.md", fmt.Sprintf("# PRD\n\n## Objetivo\n%s\n\n## Escopo MVP\n%s\n\n## Histórias de Usuário\n- Definir histórias principais\n", objective, deliverables))
-		writeIfMissing("DER.md", "# DER\n\n## Entidades\n- Definir entidades e relacionamentos\n\n## Modelo\n```mermaid\nerDiagram\n  ENTITY ||--o{ OTHER : relates\n```\n")
-		writeIfMissing("POPS.md", "# POPs Técnicos\n\n## POP: Setup local\n- Passos de ambiente\n\n## POP: Deploy\n- Checklist de release\n")
-		_ = s.ensureVisualChecklistDoc(project)
-	case "prospeccao":
-		writeIfMissing("FUNIL.md", fmt.Sprintf("# Funil de Prospecção\n\n## Objetivo\n%s\n\n## Entregáveis esperados\n%s\n\n## Etapas\n- ICP\n- Lista de leads\n- Cadência de contato\n", objective, deliverables))
-		writeIfMissing("SCRIPT_ABORDAGEM.md", "# Script de Abordagem\n\n## Primeiro contato\n- Mensagem inicial\n\n## Follow-up\n- Cadência e objeções\n")
-		writeIfMissing("METRICAS.md", "# Métricas\n\n- Taxa de resposta\n- Taxa de reunião\n- Taxa de conversão\n")
-	case "conteudo", "conteúdo":
-		writeIfMissing("CALENDARIO_EDITORIAL.md", fmt.Sprintf("# Calendário Editorial\n\n## Objetivo\n%s\n\n## Entregáveis\n%s\n\n## Plano semanal\n- Segunda: ...\n- Quarta: ...\n- Sexta: ...\n", objective, deliverables))
-		writeIfMissing("PERSONA.md", "# Persona\n\n## Público-alvo\n- Perfil\n\n## Dores\n- ...\n")
-		writeIfMissing("GUIA_ESTILO.md", "# Guia de Estilo\n\n## Tom de voz\n- ...\n\n## Formatos\n- ...\n")
-		_ = s.ensureVisualChecklistDoc(project)
-	case "gestao", "gestão", "operacional":
-		writeIfMissing("PLANO_ACAO.md", fmt.Sprintf("# Plano de Ação\n\n## Objetivo\n%s\n\n## Entregáveis\n%s\n\n## Frentes\n- Frente 1\n- Frente 2\n", objective, deliverables))
-		writeIfMissing("CHECKLISTS.md", "# Checklists Operacionais\n\n## Rotina diária\n- [ ] ...\n\n## Rotina semanal\n- [ ] ...\n")
-		writeIfMissing("POPS.md", "# POPs Operacionais\n\n## POP 01\n- Procedimento\n")
-	default:
-		writeIfMissing("ENTREGAVEIS.md", fmt.Sprintf("# Entregáveis\n\n## Objetivo\n%s\n\n## Entregáveis esperados\n%s\n", objective, deliverables))
-	}
-
-	return nil
-}
-
 func (s *Server) refreshProjectSummary(ctx context.Context, projectID string) error {
-	messages, err := s.store.ListProjectMessages(ctx, projectID, 120)
-	if err != nil {
-		return err
-	}
-	if len(messages) == 0 {
-		return nil
-	}
-
-	previous, _ := s.store.GetProjectSummary(ctx, projectID)
-	previousText := ""
-	if previous != nil {
-		previousText = previous.Summary
-	}
-
-	userMsgs := []string{}
-	agentMsgs := []string{}
-	for _, m := range messages {
-		if m.Sender == "user" {
-			userMsgs = append(userMsgs, m.Message)
-		} else {
-			agentMsgs = append(agentMsgs, m.Message)
-		}
-	}
-
-	latestUser := "(sem entrada)"
-	if len(userMsgs) > 0 {
-		latestUser = compactText(userMsgs[len(userMsgs)-1], 180)
-	}
-	latestAgent := "(sem resposta)"
-	if len(agentMsgs) > 0 {
-		latestAgent = compactText(agentMsgs[len(agentMsgs)-1], 180)
-	}
-
-	objectives := collectMilestones(userMsgs, []string{"objetivo", "meta", "resultado", "mvp", "entreg"}, 3)
-	decisions := collectMilestones(userMsgs, []string{"decid", "escolh", "vamos", "usar", "padrão", "stack"}, 4)
-	blockers := collectMilestones(userMsgs, []string{"bloque", "erro", "falha", "problema", "risco", "imped"}, 3)
-	nextSteps := collectMilestones(userMsgs, []string{"próximo", "next", "fazer", "etapa", "seguir", "depois"}, 4)
-
-	if len(objectives) == 0 {
-		objectives = []string{"Objetivo ainda não explicitado claramente no chat."}
-	}
-	if len(nextSteps) == 0 {
-		nextSteps = []string{"Definir próximo passo acionável com prazo curto."}
-	}
-
-	carry := compactPreviousSummary(previousText, 380)
-	summary := fmt.Sprintf("Resumo estratégico do projeto (auto-update)\n\n[Estado]\n- Interações: %d (user: %d | gestor: %d)\n- Última solicitação: %s\n- Última resposta do gestor: %s\n\n[Objetivo]\n%s\n\n[Decisões]\n%s\n\n[Bloqueios/Riscos]\n%s\n\n[Próximos passos]\n%s\n\n[Memória compactada]\n%s\n\n[Atualizado em]\n- %s",
-		len(messages), len(userMsgs), len(agentMsgs), latestUser, latestAgent,
-		toBullets(objectives), toBullets(decisions), toBullets(blockers), toBullets(nextSteps), carry,
-		time.Now().Format(time.RFC3339))
-
+	messages, _ := s.store.ListProjectMessages(ctx, projectID, 50)
+	if len(messages) == 0 { return nil }
+	summary := "Estado Atual: " + messages[len(messages)-1].Message
 	return s.store.UpsertProjectSummary(ctx, projectID, summary)
 }
 
-func (s *Server) syncIncrementalDeliverables(ctx context.Context, project *core.Project, userMessage, agentReply string) error {
-	if project == nil {
-		return nil
-	}
-	st, err := s.store.GetPlannerState(ctx, project.ID)
-	if err != nil || st == nil {
-		return err
-	}
-	if st.Stage != "active" {
-		return nil
-	}
-
-	docsDir := filepath.Join(project.Path, "docs")
-	niche := strings.ToLower(strings.TrimSpace(st.Niche))
-	targets := []string{"PLANNING.md"}
-	switch niche {
-	case "software":
-		targets = append(targets, "PRD.md", "DER.md", "POPS.md")
-	case "prospeccao":
-		targets = append(targets, "FUNIL.md", "SCRIPT_ABORDAGEM.md", "METRICAS.md")
-	case "conteudo", "conteúdo":
-		targets = append(targets, "CALENDARIO_EDITORIAL.md", "PERSONA.md", "GUIA_ESTILO.md")
-	case "gestao", "gestão", "operacional":
-		targets = append(targets, "PLANO_ACAO.md", "CHECKLISTS.md", "POPS.md")
-	default:
-		targets = append(targets, "ENTREGAVEIS.md")
-	}
-
-	entry := fmt.Sprintf("\n\n## Marco %s\n- Input usuário: %s\n- Resposta gestor: %s\n", time.Now().Format("2006-01-02 15:04"), compactText(userMessage, 220), compactText(agentReply, 260))
-	updated := false
-	for _, name := range targets {
-		path := filepath.Join(docsDir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		if err := appendWithRotation(path, entry, 180_000); err == nil {
-			updated = true
-		}
-	}
-	if updated {
-		_ = s.updateManagerLearnings(ctx, project, st, userMessage, agentReply)
-		_ = checkpointProjectDocs(project.Path, st.Niche, userMessage, agentReply)
-	}
+func (s *Server) syncIncrementalDeliverables(ctx context.Context, project *core.Project, userMsg, agentReply string) error {
+	path := filepath.Join(project.Path, "docs", "PLANNING.md")
+	entry := fmt.Sprintf("\n## Log %s\n- U: %s\n- A: %s\n", time.Now().Format("15:04"), userMsg, agentReply)
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if f != nil { defer f.Close(); _, _ = f.WriteString(entry) }
+	
+	_ = exec.Command("git", "-C", project.Path, "add", ".").Run()
+	_ = exec.Command("git", "-C", project.Path, "commit", "-m", "chore: sync docs").Run()
 	return nil
 }
 
-func compactText(v string, max int) string {
-	v = strings.Join(strings.Fields(strings.TrimSpace(v)), " ")
-	if v == "" {
-		return "(vazio)"
-	}
-	if len(v) > max {
-		return v[:max] + "..."
-	}
-	return v
-}
-
-func compactPreviousSummary(summary string, max int) string {
-	summary = compactText(summary, max)
-	if summary == "(vazio)" {
-		return "Sem memória anterior consolidada."
-	}
-	return summary
-}
-
-func toBullets(items []string) string {
-	if len(items) == 0 {
-		return "- (sem itens)"
-	}
-	lines := make([]string, 0, len(items))
-	for _, it := range items {
-		lines = append(lines, "- "+it)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func resolveDailyManagerLimit() int {
-	raw := strings.TrimSpace(os.Getenv("OPENCLAW_MANAGER_DAILY_LIMIT"))
-	if raw == "" {
-		return 120
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 120
-	}
-	return n
-}
-
-func baseManagerPromptByNiche(niche string) string {
-	switch strings.ToLower(strings.TrimSpace(niche)) {
-	case "software":
-		return "Você é gestor de projeto de software. Seja técnico, pragmático, entregue próximos passos acionáveis e mantenha docs/PLANNING.md atualizado por marcos."
-	case "prospeccao":
-		return "Você é gestor de prospecção/vendas. Foque em funil, ICP, scripts, cadência e métricas de conversão com ações objetivas."
-	case "conteudo", "conteúdo":
-		return "Você é gestor de conteúdo. Foque em persona, calendário editorial, formatos, distribuição e métricas de performance."
-	case "gestao", "gestão", "operacional":
-		return "Você é gestor operacional. Foque em processos, checklists, responsabilidades, riscos e melhoria contínua."
-	default:
-		return "Você é gestor especialista de projeto multi-nicho. Entregue decisões claras, riscos e próximos passos práticos."
-	}
+func (s *Server) warmupManagerSession(projectID, sessionID, agentID string) {
+	_ = exec.Command("openclaw", "agent", "--agent", agentID, "--session-id", sessionID, "--message", "GESTOR_PRONTO", "--timeout", "30").Run()
 }
 
 func sanitizePathName(name string) string {
-	name = strings.TrimSpace(strings.ToLower(name))
-	if name == "" {
-		return "novo-projeto"
-	}
-	replacer := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-")
-	return replacer.Replace(name)
-}
-
-func collectMilestones(messages []string, keywords []string, max int) []string {
-	out := []string{}
-	seen := map[string]bool{}
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := strings.ToLower(strings.TrimSpace(messages[i]))
-		if m == "" {
-			continue
-		}
-		matched := false
-		for _, k := range keywords {
-			if strings.Contains(m, k) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			continue
-		}
-		item := compactText(messages[i], 150)
-		if !seen[item] {
-			out = append(out, item)
-			seen[item] = true
-		}
-		if len(out) >= max {
-			break
-		}
-	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out
-}
-
-func appendWithRotation(path, entry string, maxBytes int64) error {
-	if maxBytes <= 0 {
-		maxBytes = 180_000
-	}
-	if info, err := os.Stat(path); err == nil && info.Size() >= maxBytes {
-		stamp := time.Now().Format("20060102-150405")
-		rotated := fmt.Sprintf("%s.%s.bak", path, stamp)
-		if err := os.Rename(path, rotated); err == nil {
-			header := fmt.Sprintf("# Arquivo rotacionado\n\nOrigem: %s\nData: %s\n\n", filepath.Base(path), time.Now().Format(time.RFC3339))
-			_ = os.WriteFile(path, []byte(header), 0644)
-		}
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(entry)
-	return err
-}
-
-func (s *Server) updateManagerLearnings(ctx context.Context, project *core.Project, st *db.PlannerState, userMessage, agentReply string) error {
-	if project == nil {
-		return nil
-	}
-	learningsPath := filepath.Join(project.Path, "docs", "LEARNINGS.md")
-	if _, err := os.Stat(learningsPath); os.IsNotExist(err) {
-		header := "# LEARNINGS.md\n\nAprendizados automáticos do gestor com base na conversa e documentos do projeto.\n"
-		_ = os.WriteFile(learningsPath, []byte(header), 0644)
-	}
-
-	decision := compactText(agentReply, 180)
-	risk := "Sem risco explícito"
-	lowUser := strings.ToLower(userMessage)
-	if strings.Contains(lowUser, "erro") || strings.Contains(lowUser, "falha") || strings.Contains(lowUser, "risco") || strings.Contains(lowUser, "bloque") {
-		risk = compactText(userMessage, 140)
-	}
-	next := "Refinar próximo passo no chat"
-	if st != nil && strings.TrimSpace(st.Stage) != "" {
-		next = fmt.Sprintf("Avançar etapa '%s' com entrega documentada em docs/", st.Stage)
-	}
-
-	entry := fmt.Sprintf("\n\n## Learning %s\n- Decisão: %s\n- Risco: %s\n- Próximo passo: %s\n", time.Now().Format("2006-01-02 15:04"), decision, risk, next)
-	return appendWithRotation(learningsPath, entry, 180_000)
-}
-
-func checkpointProjectDocs(projectPath, niche, userMessage, agentReply string) error {
-	if strings.TrimSpace(projectPath) == "" {
-		return nil
-	}
-	h := sha1.Sum([]byte(compactText(userMessage, 120) + "|" + compactText(agentReply, 120)))
-	hash := hex.EncodeToString(h[:])[:8]
-	msg := fmt.Sprintf("chore(docs): marco %s [%s]", strings.ToLower(strings.TrimSpace(niche)), hash)
-
-	cmdAdd := exec.Command("git", "-C", projectPath, "add", "docs")
-	if out, err := cmdAdd.CombinedOutput(); err != nil {
-		_ = out
-		return nil
-	}
-	cmdCommit := exec.Command("git", "-C", projectPath, "commit", "-m", msg)
-	out, err := cmdCommit.CombinedOutput()
-	if err != nil {
-		if strings.Contains(strings.ToLower(string(out)), "nothing to commit") {
-			return nil
-		}
-		return nil
-	}
-	return nil
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), " ", "-")
 }

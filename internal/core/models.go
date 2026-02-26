@@ -14,6 +14,11 @@ type Project struct {
 	ManagerSessionKey string    `json:"manager_session_key"`
 	ManagerAgentID    string    `json:"manager_agent_id"`
 	ManagerStatus     string    `json:"manager_status"`
+	LeaderName        string    `json:"leader_name"`
+	LeaderEmail       string    `json:"leader_email"`
+	Location          string    `json:"location"`
+	Vibe              string    `json:"vibe"`
+	ProjectType       string    `json:"project_type"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 

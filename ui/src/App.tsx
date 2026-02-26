@@ -1,11 +1,25 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, LayoutGrid, Table2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface NavItemProps { icon: React.ReactNode; label: string; active?: boolean; onClick?: () => void; }
 type View = 'dashboard' | 'projects' | 'newProject' | 'chat';
 type ChatItem = { sender: 'agent' | 'user'; message: string };
-type Project = { id: string; name: string; description?: string; manager_status: string; manager_session_key: string };
+type Project = { 
+  id: string; 
+  name: string; 
+  description?: string; 
+  manager_status: string; 
+  manager_session_key: string;
+  leader_name?: string;
+  leader_email?: string;
+  location?: string;
+  vibe?: string;
+  project_type?: 'new' | 'existing';
+  git_url?: string;
+};
 type ManagerInfo = { manager_status: string; manager_enabled: boolean; manager_session_key: string; api_calls: number; daily_calls?: number };
 type ProjectMessage = { id: string; sender: 'agent' | 'user'; message: string };
 type PlannerInfo = { stage: string; project_type: string; niche: string; deliverables: string[]; deliverables_done: string[]; last_checkpoint: string };
@@ -29,9 +43,15 @@ const Dashboard = () => {
 
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [leaderName, setLeaderName] = useState('');
+  const [leaderEmail, setLeaderEmail] = useState('');
+  const [location, setLocation] = useState('');
+  const [vibe, setVibe] = useState('Profissional e Pragmático');
+  const [projectType, setProjectType] = useState<'new' | 'existing'>('new');
+  const [gitUrl, setGitUrl] = useState('');
 
   const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
-  const version = '0.2.1-stable';
+  const version = '0.2.3-stable';
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
   const filteredProjects = projects.filter((p) => statusFilter === 'all' ? true : p.manager_status === statusFilter);
@@ -88,15 +108,20 @@ const Dashboard = () => {
     if (!newName.trim() || creatingProject) return;
     setCreatingProject(true);
     try {
-      const payload = { name: newName.trim(), description: newDescription.trim() || 'Projeto iniciado via ClawProject' };
+      const payload = { 
+        name: newName.trim(), 
+        description: newDescription.trim() || 'Projeto iniciado via ClawProject',
+        leader_name: leaderName.trim(),
+        leader_email: leaderEmail.trim(),
+        location: location.trim(),
+        vibe: vibe,
+        project_type: projectType,
+        git_url: gitUrl.trim()
+      };
       const r = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error();
       const created: Project = await r.json();
-      
-      // Delay artificial para garantir que o background worker do Go (openclaw agents add)
-      // tenha tempo de concluir antes de abrirmos o chat.
       await new Promise(resolve => setTimeout(resolve, 3500));
-      
       await loadProjects();
       setSelectedProjectId(created.id);
       setView('chat');
@@ -131,14 +156,14 @@ const Dashboard = () => {
     }
   };
 
-  const handleControl = async (action: 'restart' | 'pause' | 'resume') => {
+  const handleControl = async (action: 'restart' | 'pause' | 'resume' | 'start-execution') => {
     if (!selectedProjectId || controlling) return;
     setControlling(true);
     try {
       await fetch(`/api/projects/${selectedProjectId}/manager/control`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
       });
-      await Promise.all([loadManager(selectedProjectId), loadPlanner(selectedProjectId), loadProjects()]);
+      await Promise.all([loadManager(selectedProjectId), loadPlanner(selectedProjectId), loadProjects(), loadMessages(selectedProjectId)]);
     } finally {
       setControlling(false);
     }
@@ -235,7 +260,7 @@ const Dashboard = () => {
 
             {view === 'newProject' && (
               <motion.div key="newProject" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6 flex items-start justify-center overflow-auto">
-                <div className="w-full max-w-2xl bg-white border rounded-2xl p-6 relative overflow-hidden">
+                <div className="w-full max-w-2xl bg-white border rounded-2xl p-8 relative overflow-hidden shadow-xl mb-10">
                   {creatingProject && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
                       <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -248,14 +273,69 @@ const Dashboard = () => {
                       </div>
                     </motion.div>
                   )}
-                  <h3 className="text-xl font-black mb-4">Dados iniciais do projeto</h3>
-                  <label className="text-xs font-bold text-slate-500">Nome do projeto</label>
-                  <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 mb-4 border rounded-lg px-3 py-2" placeholder="Ex: automacao-comercial-q2" />
-                  <label className="text-xs font-bold text-slate-500">Descrição inicial</label>
-                  <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} className="w-full mt-1 mb-4 border rounded-lg px-3 py-2 min-h-[90px]" placeholder="Contexto inicial para o gestor" />
-                  <div className="flex justify-end">
-                    <button onClick={createProject} disabled={creatingProject || !newName.trim()} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold disabled:opacity-60">
-                      {creatingProject ? 'Processando...' : 'Criar e iniciar'}
+                  <h3 className="text-2xl font-black mb-6 text-indigo-900 border-b pb-4">Novo Projeto Agent-Native</h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Identificação do Projeto</label>
+                        <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="Nome (ex: watink-saas)" />
+                      </div>
+                      
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Descrição Inicial (Alma do Agente)</label>
+                        <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all min-h-[120px]" placeholder="O que este projeto faz? Qual o objetivo principal?" />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Vibe do Gestor</label>
+                        <select value={vibe} onChange={(e) => setVibe(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 outline-none cursor-pointer">
+                          <option>Profissional e Pragmático</option>
+                          <option>Criativo e Inovador</option>
+                          <option>Rígido e Analítico</option>
+                          <option>Amigável e Colaborativo</option>
+                          <option>Sarcástico e Eficiente</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 border-l pl-6">
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Líder do Projeto (Reporte)</label>
+                        <input value={leaderName} onChange={(e) => setLeaderName(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 outline-none" placeholder="Nome do Líder" />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">E-mail do Líder</label>
+                        <input value={leaderEmail} onChange={(e) => setLeaderEmail(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 outline-none" placeholder="lider@empresa.com" />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Localização (Cidade/País)</label>
+                        <input value={location} onChange={(e) => setLocation(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 outline-none" placeholder="São Paulo, Brasil" />
+                      </div>
+
+                      <div className="pt-2">
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider block mb-2">Estado do Repositório</label>
+                        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
+                          <button onClick={() => setProjectType('new')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${projectType === 'new' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Projeto Novo</button>
+                          <button onClick={() => setProjectType('existing')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${projectType === 'existing' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Existente</button>
+                        </div>
+                      </div>
+
+                      {projectType === 'existing' && (
+                        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+                          <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">URL do Repositório Git</label>
+                          <input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-slate-50 outline-none border-indigo-200" placeholder="https://github.com/..." />
+                        </motion.div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-8 pt-6 border-t flex justify-end">
+                    <button onClick={createProject} disabled={creatingProject || !newName.trim()} className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-black apple-shadow hover:bg-indigo-700 disabled:opacity-60 transition-all flex items-center gap-3">
+                      {creatingProject ? 'CONSTRUINDO...' : 'CRIAR E INICIAR GESTÃO'}
+                      <Bot size={20} />
                     </button>
                   </div>
                 </div>
@@ -272,9 +352,22 @@ const Dashboard = () => {
                       <button onClick={() => handleControl('pause')} disabled={!selectedProjectId || controlling} className="px-3 py-2 text-xs font-bold rounded-lg bg-amber-500 text-white disabled:opacity-50">Pausar</button>
                       <button onClick={() => handleControl('resume')} disabled={!selectedProjectId || controlling} className="px-3 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white disabled:opacity-50">Retomar</button>
                     </div>
-                    <div className="flex-1 space-y-4 overflow-y-auto mb-4 pr-2">{chatHistory.map((item, idx) => <ChatBubble key={idx} sender={item.sender} message={item.message} />)}</div>
+                    <div className="flex-1 space-y-4 overflow-y-auto mb-4 pr-2">
+                      {chatHistory.map((item, idx) => <ChatBubble key={idx} sender={item.sender} message={item.message} />)}
+                      {sending && (
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start items-end space-x-2">
+                          <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 mb-1 flex-shrink-0"><Bot size={14} /></div>
+                          <div className="max-w-[85%] p-3 rounded-2xl bg-white text-gray-500 rounded-bl-none border border-gray-100 text-sm">
+                            <span className="inline-flex items-center gap-2">
+                              <span className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
+                              pensando...
+                            </span>
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
                     <div className="relative">
-                      <input type="text" value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Converse com o gestor. A conversa treina o agente junto com os docs..." className="w-full bg-white border border-gray-200 rounded-[22px] py-4 px-6 pr-14 focus:outline-none focus:border-indigo-500" />
+                      <input type="text" value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Converse com o gestor..." className="w-full bg-white border border-gray-200 rounded-[22px] py-4 px-6 pr-14 focus:outline-none focus:border-indigo-500" />
                       <button onClick={handleSendMessage} disabled={sending} className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white disabled:opacity-60"><Send size={18} /></button>
                     </div>
                   </div>
@@ -286,7 +379,18 @@ const Dashboard = () => {
                     </Panel>
                     <Panel title="Entregáveis (docs/)">{(planner?.deliverables || []).map((d) => { const done = (planner?.deliverables_done || []).includes(d); return <div key={d} className={`text-xs font-semibold ${done ? 'text-emerald-600' : 'text-slate-400'}`}>{done ? '✅' : '⏳'} {d}</div>; })}</Panel>
                     <Panel title="Checkpoint Git"><div className="text-xs break-all">{planner?.last_checkpoint || 'Sem checkpoint ainda.'}</div></Panel>
-                    <Panel title="Aprendizado do gestor"><div className="text-xs text-slate-600">O gestor aprende automaticamente com conversa + docs (PLANNING e entregáveis).</div></Panel>
+                    <Panel title="Aprendizado do gestor">
+                      <div className="text-xs text-slate-600 mb-3">O gestor aprende automaticamente com conversa + docs (PLANNING e entregáveis).</div>
+                      {planner?.stage === 'active' && (
+                        <button 
+                          onClick={() => handleControl('start-execution')}
+                          disabled={controlling}
+                          className="w-full py-3 px-4 bg-indigo-600 text-white rounded-xl font-black text-xs hover:bg-indigo-700 transition-colors apple-shadow disabled:opacity-50"
+                        >
+                          🚀 START PROJETO (ATIVAR BÍBLIA)
+                        </button>
+                      )}
+                    </Panel>
                   </aside>
                 </div>
               </motion.div>
@@ -308,10 +412,11 @@ const NavItem = ({ icon, label, active = false, onClick }: NavItemProps) => (
 
 const ChatBubble = ({ sender, message }: { sender: 'agent' | 'user'; message: string }) => (
   <motion.div initial={{ opacity: 0, x: sender === 'user' ? 20 : -20 }} animate={{ opacity: 1, x: 0 }} className={`flex ${sender === 'user' ? 'justify-end' : 'justify-start'} items-end space-x-2`}>
-    {sender === 'agent' && <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 mb-1"><Bot size={14} /></div>}
-    <div className={`max-w-[80%] p-4 rounded-2xl text-sm font-medium apple-shadow ${sender === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-gray-900 rounded-bl-none border border-gray-100'}`}>{message}</div>
+    {sender === 'agent' && <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 mb-1 flex-shrink-0"><Bot size={14} /></div>}
+    <div className={`max-w-[85%] p-4 rounded-2xl text-sm apple-shadow markdown-body ${sender === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-gray-900 rounded-bl-none border border-gray-100'}`}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message}</ReactMarkdown>
+    </div>
   </motion.div>
 );
 
 export default Dashboard;
-
