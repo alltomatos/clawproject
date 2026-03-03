@@ -153,6 +153,15 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("projects", "project_type", "TEXT"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("projects", "delivered_at", "DATETIME"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "delivery_summary", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("projects", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"); err != nil {
+		return err
+	}
 
 	return nil
 }

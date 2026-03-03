@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,6 +41,12 @@ type managerControlRequest struct {
 	Action string `json:"action"`
 }
 
+type deliverProjectRequest struct {
+	ApprovedBy string `json:"approved_by"`
+	Notes      string `json:"notes"`
+	Force      bool   `json:"force"`
+}
+
 type openclawAgentResult struct {
 	Status string `json:"status"`
 	Result struct {
@@ -67,8 +74,53 @@ func NewServer(store *db.Store) *Server {
 func (s *Server) RegisterHandlers() {
 	http.HandleFunc("/api/projects", s.handleProjects)
 	http.HandleFunc("/api/projects/", s.handleProjectManagerRoutes)
+	http.HandleFunc("/api/projects/delete/", s.handleDeleteProject)
 	http.HandleFunc("/api/status", s.handleStatus)
 	http.HandleFunc("/api/version", s.handleVersion)
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	projectID := strings.TrimPrefix(r.URL.Path, "/api/projects/delete/")
+	project, err := s.store.GetProjectByID(r.Context(), projectID)
+	if err != nil || project == nil {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	// 1. Destruição do Agente no OpenClaw
+	if project.ManagerAgentID != "" && project.ManagerAgentID != "main" {
+		fmt.Printf("[destroy] removing agent id=%s\n", project.ManagerAgentID)
+		// Alterado para --force para automatizar
+		_ = exec.Command("openclaw", "agents", "delete", project.ManagerAgentID, "--force").Run()
+		
+		// 1.1 Limpeza manual da pasta do agente caso o CLI falhe em deletar tudo
+		home, _ := os.UserHomeDir()
+		agentPath := filepath.Join(home, ".openclaw", "agents", project.ManagerAgentID)
+		if _, err := os.Stat(agentPath); err == nil {
+			fmt.Printf("[destroy] manual cleanup of agent folder: %s\n", agentPath)
+			_ = os.RemoveAll(agentPath)
+		}
+
+		// Garante que o OpenClaw Gateway recarregue a configuração após a remoção
+		fmt.Printf("[destroy] restarting gateway to apply changes\n")
+		_ = exec.Command("openclaw", "gateway", "restart").Run()
+	}
+
+	// 2. Remoção de Arquivos (Cuidado extremo)
+	if project.Path != "" && strings.Contains(project.Path, ".openclaw/workspace") {
+		fmt.Printf("[destroy] removing path=%s\n", project.Path)
+		_ = os.RemoveAll(project.Path)
+	}
+
+	// 3. Remoção do Banco de Dados
+	_ = s.store.DeleteProject(r.Context(), projectID)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Destruição total concluída."})
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
@@ -93,12 +145,14 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		projects, err := s.store.ListProjects(r.Context())
 		if err != nil {
+			log.Printf("[api] error listing projects: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if projects == nil {
 			projects = []*core.Project{}
 		}
+		log.Printf("[api] handleProjects GET: returning %d projects", len(projects))
 		json.NewEncoder(w).Encode(projects)
 
 	case http.MethodPost:
@@ -244,6 +298,11 @@ func (s *Server) handleProjectManagerRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if parts[1] == "deliver" && r.Method == http.MethodPost {
+		s.handleProjectDeliver(w, r, project)
+		return
+	}
+
 	if parts[1] != "manager" {
 		http.NotFound(w, r)
 		return
@@ -361,6 +420,91 @@ func (s *Server) handleManagerControl(w http.ResponseWriter, r *http.Request, pr
 	if action == "restart" && s.managerEnabled { go s.warmupManagerSession(project.ID, sessionKey, agentID) }
 
 	json.NewEncoder(w).Encode(map[string]interface{}{ "ok": true, "manager_session_key": sessionKey, "manager_status": status })
+}
+
+func (s *Server) handleProjectDeliver(w http.ResponseWriter, r *http.Request, project *core.Project) {
+	var req deliverProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.ApprovedBy = strings.TrimSpace(req.ApprovedBy)
+	if req.ApprovedBy == "" {
+		http.Error(w, "approved_by is required", http.StatusBadRequest)
+		return
+	}
+
+	if project.Status != "ready_for_delivery" && !req.Force {
+		http.Error(w, "project status must be ready_for_delivery", http.StatusConflict)
+		return
+	}
+
+	var runningJobs int
+	if err := s.store.DB.QueryRowContext(r.Context(), `SELECT COUNT(1) FROM project_jobs WHERE project_id = ? AND status = 'running'`, project.ID).Scan(&runningJobs); err != nil {
+		runningJobs = 0
+	}
+	if runningJobs > 0 && !req.Force {
+		http.Error(w, "there are running jobs", http.StatusConflict)
+		return
+	}
+
+	docsDir := filepath.Join(project.Path, "docs")
+	planningPath := filepath.Join(docsDir, "PLANNING.md")
+	roadmapPath := filepath.Join(docsDir, "ROADMAP.md")
+	if _, err := os.Stat(planningPath); err != nil && !req.Force {
+		http.Error(w, "docs/PLANNING.md not found", http.StatusConflict)
+		return
+	}
+	if _, err := os.Stat(roadmapPath); err != nil && !req.Force {
+		http.Error(w, "docs/ROADMAP.md not found", http.StatusConflict)
+		return
+	}
+
+	var doneCards int
+	if err := s.store.DB.QueryRowContext(r.Context(), `SELECT COUNT(1) FROM cards WHERE project_id = ? AND status = 'done'`, project.ID).Scan(&doneCards); err != nil {
+		doneCards = 0
+	}
+	if doneCards < 1 && !req.Force {
+		http.Error(w, "at least one done card is required", http.StatusConflict)
+		return
+	}
+
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	now := time.Now().UTC()
+	deliveryPath := filepath.Join(docsDir, "DELIVERY.md")
+	deliveryContent := fmt.Sprintf("# DELIVERY - %s\n\n## Resumo Executivo\n- Aprovado por: %s\n- Data: %s\n- Notas: %s\n\n## Entregáveis\n- docs/PLANNING.md\n- docs/ROADMAP.md\n- docs/DELIVERY.md\n\n## Execução\n- Cards concluídos: %d\n\n## Próximos passos (V2)\n- Refinar backlog e integrações\n", project.Name, req.ApprovedBy, now.Format(time.RFC3339), req.Notes, doneCards)
+	if err := os.WriteFile(deliveryPath, []byte(deliveryContent), 0644); err != nil {
+		http.Error(w, "failed to write DELIVERY.md", http.StatusInternalServerError)
+		return
+	}
+
+	summaryJSON, _ := json.Marshal(map[string]any{
+		"approved_by": req.ApprovedBy,
+		"notes":       req.Notes,
+		"done_cards":  doneCards,
+		"artifacts":   []string{"docs/PLANNING.md", "docs/ROADMAP.md", "docs/DELIVERY.md"},
+	})
+
+	_, err := s.store.DB.ExecContext(r.Context(), `
+		UPDATE projects
+		SET status = 'delivered', delivered_at = CURRENT_TIMESTAMP, delivery_summary = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, string(summaryJSON), project.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok":           true,
+		"project_id":   project.ID,
+		"state":        "delivered",
+		"delivered_at": now.Format(time.RFC3339),
+		"artifacts":    []string{"docs/PLANNING.md", "docs/ROADMAP.md", "docs/DELIVERY.md"},
+	})
 }
 
 func (s *Server) runOpenClawManagerTurn(project *core.Project, userMessage string) (string, error) {
