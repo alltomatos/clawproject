@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, LayoutGrid, Table2 } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Activity, Plus, Send, ArrowLeft, Bot, LayoutGrid, Table2, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -51,21 +51,28 @@ const Dashboard = () => {
   const [gitUrl, setGitUrl] = useState('');
 
   const reconnectAttemptedRef = useRef<Record<string, boolean>>({});
-  const version = '0.2.3-stable';
+  const version = '0.2.4-stable';
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
-  const filteredProjects = projects.filter((p) => statusFilter === 'all' ? true : p.manager_status === statusFilter);
+  const filteredProjects = projects.filter((p) => {
+    if (statusFilter === 'all') return true;
+    return p.manager_status.toLowerCase() === statusFilter.toLowerCase();
+  });
   const managerOnline = manager?.manager_status === 'active';
   const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'visual_checklist', 'active'];
   const stageLabels: Record<string, string> = { triage_type: 'Tipo', triage_niche: 'Nicho', objective: 'Objetivo', deliverables: 'Entregáveis', visual_checklist: 'Checklist Visual', active: 'Execução' };
   const stageIndex = planner ? Math.max(0, plannerStages.indexOf(planner.stage)) : 0;
 
   const loadProjects = async () => {
-    const r = await fetch('/api/projects');
-    if (!r.ok) return;
-    const data: Project[] = await r.json();
-    setProjects(data);
-    if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
+    try {
+      const r = await fetch('/api/projects');
+      if (!r.ok) return;
+      const data: Project[] = await r.json();
+      setProjects(data);
+      if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
+    } catch (err) {
+      console.error('Erro ao carregar projetos:', err);
+    }
   };
 
   const loadManager = async (projectId: string) => {
@@ -160,10 +167,36 @@ const Dashboard = () => {
     if (!selectedProjectId || controlling) return;
     setControlling(true);
     try {
-      await fetch(`/api/projects/${selectedProjectId}/manager/control`, {
+      const r = await fetch(`/api/projects/${selectedProjectId}/manager/control`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
       });
+      
+      if (action === 'start-execution' && r.ok) {
+        // Se foi o START, damos um pequeno delay visual e vamos para a atividade/pipeline
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        setView('projects'); // Por enquanto volta para projetos ou podemos ir para 'Atividade'
+      }
+
       await Promise.all([loadManager(selectedProjectId), loadPlanner(selectedProjectId), loadProjects(), loadMessages(selectedProjectId)]);
+    } finally {
+      setControlling(false);
+    }
+  };
+
+  const deleteProject = async (id: string, name: string) => {
+    if (!window.confirm(`⚠️ DESTRUIÇÃO TOTAL: Tem certeza que deseja deletar o projeto "${name}"? \n\nIsso irá remover permanentemente:\n- Todos os arquivos da pasta\n- O agente no OpenClaw\n- O histórico de mensagens`)) return;
+    
+    setControlling(true); // Reutilizamos o estado de loading/bloqueio
+    try {
+      const r = await fetch(`/api/projects/delete/${id}`, { method: 'DELETE' });
+      if (r.ok) {
+        // Aguardamos 5 segundos para o Gateway do OpenClaw reiniciar e estabilizar
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        await loadProjects();
+        if (selectedProjectId === id) setSelectedProjectId('');
+      }
+    } catch (err) {
+      alert('Erro ao deletar projeto');
     } finally {
       setControlling(false);
     }
@@ -215,45 +248,84 @@ const Dashboard = () => {
             )}
 
             {view === 'projects' && (
-              <motion.div key="projects" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6 overflow-auto">
-                <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => setDisplayMode('grid')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1 ${displayMode === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200'}`}><LayoutGrid size={14} /> Grid</button>
-                    <button onClick={() => setDisplayMode('table')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1 ${displayMode === 'table' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200'}`}><Table2 size={14} /> Tabela</button>
-                    <button onClick={() => setStatusFilter('all')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Todos</button>
-                    <button onClick={() => setStatusFilter('active')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'active' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Ativos</button>
-                    <button onClick={() => setStatusFilter('offline')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'offline' ? 'bg-amber-500 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Offline</button>
-                    <button onClick={() => setStatusFilter('paused')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'paused' ? 'bg-orange-500 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Pausado</button>
-                  </div>
-                  <button onClick={() => setView('newProject')} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm"><Plus size={16} /> Novo Projeto</button>
-                </div>
-
-                {displayMode === 'grid' ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {filteredProjects.map((p) => (
-                      <button key={p.id} onClick={() => openProject(p.id)} className="text-left bg-white border rounded-2xl p-4 hover:border-indigo-400">
-                        <div className="font-bold text-sm mb-1 truncate">{p.name || p.id}</div>
-                        <div className="text-xs text-slate-500 mb-2 truncate">{p.description || 'Sem descrição'}</div>
-                        <div className="text-[11px] text-slate-400">Status gestor: {p.manager_status}</div>
-                      </button>
-                    ))}
+              <motion.div key="projects" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6 overflow-auto relative">
+                {controlling && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 bg-white/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+                    <div className="w-16 h-16 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <h3 className="text-2xl font-black mb-2 text-red-600 uppercase tracking-tighter">DESTRUIÇÃO EM CURSO...</h3>
+                    <p className="text-slate-500 text-sm max-w-sm font-bold">Tarefa irreversível: Removendo Agente e limpando Gateway OpenClaw.</p>
+                  </motion.div>
+                )}
+                {filteredProjects.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-[60vh] text-center p-8 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
+                    <div className="w-16 h-16 bg-white shadow-sm rounded-2xl flex items-center justify-center mb-4 text-slate-300">
+                      <Trash2 size={32} />
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-900 mb-2">Ambiente Limpo</h3>
+                    <p className="text-sm text-slate-500 max-w-xs mb-6">
+                      Você não possui projetos cadastrados no momento. Comece criando um novo projeto para gerenciar seus agentes.
+                    </p>
+                    <button 
+                      onClick={() => setView('newProject')}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-sm transition-all flex items-center gap-2"
+                    >
+                      <Plus size={16} /> CRIAR PRIMEIRO PROJETO
+                    </button>
                   </div>
                 ) : (
-                  <div className="bg-white border rounded-2xl overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50"><tr><th className="text-left p-3">Projeto</th><th className="text-left p-3">Descrição</th><th className="text-left p-3">Gestor</th><th className="text-left p-3">Ação</th></tr></thead>
-                      <tbody>
+                  <>
+                    <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button onClick={() => setDisplayMode('grid')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1 ${displayMode === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200'}`}><LayoutGrid size={14} /> Grid</button>
+                        <button onClick={() => setDisplayMode('table')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1 ${displayMode === 'table' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200'}`}><Table2 size={14} /> Tabela</button>
+                        <button onClick={() => setStatusFilter('all')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Todos</button>
+                        <button onClick={() => setStatusFilter('active')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'active' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Ativos</button>
+                        <button onClick={() => setStatusFilter('offline')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'offline' ? 'bg-amber-500 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Offline</button>
+                        <button onClick={() => setStatusFilter('paused')} className={`px-3 py-2 rounded-lg text-xs font-bold ${statusFilter === 'paused' ? 'bg-orange-500 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>Pausado</button>
+                      </div>
+                      <button onClick={() => setView('newProject')} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm"><Plus size={16} /> Novo Projeto</button>
+                    </div>
+
+                    {displayMode === 'grid' ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                         {filteredProjects.map((p) => (
-                          <tr key={p.id} className="border-t">
-                            <td className="p-3 font-semibold">{p.name || p.id}</td>
-                            <td className="p-3 text-slate-500">{p.description || '-'}</td>
-                            <td className="p-3 text-slate-500">{p.manager_status}</td>
-                            <td className="p-3"><button onClick={() => openProject(p.id)} className="text-indigo-600 font-bold">Abrir</button></td>
-                          </tr>
+                          <div key={p.id} className="group relative bg-white border rounded-2xl p-4 hover:border-indigo-400 transition-all shadow-sm hover:shadow-md flex flex-col justify-between h-[140px]">
+                            <button onClick={() => openProject(p.id)} className="text-left flex-1 min-w-0">
+                              <div className="font-bold text-sm mb-1 truncate text-indigo-900">{p.name || p.id}</div>
+                              <div className="text-xs text-slate-500 mb-2 line-clamp-2">{p.description || 'Sem descrição'}</div>
+                              <div className="text-[10px] font-black text-slate-400 uppercase">Status: {p.manager_status}</div>
+                            </button>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); deleteProject(p.id, p.name); }}
+                              className="absolute bottom-4 right-4 p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Deletar Projeto"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      </div>
+                    ) : (
+                      <div className="bg-white border rounded-2xl overflow-hidden shadow-sm">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50"><tr><th className="text-left p-4 text-slate-600 font-black uppercase text-[10px]">Projeto</th><th className="text-left p-4 text-slate-600 font-black uppercase text-[10px]">Descrição</th><th className="text-left p-4 text-slate-600 font-black uppercase text-[10px]">Gestor</th><th className="text-right p-4 text-slate-600 font-black uppercase text-[10px]">Ações</th></tr></thead>
+                          <tbody>
+                            {filteredProjects.map((p) => (
+                              <tr key={p.id} className="border-t group hover:bg-slate-50">
+                                <td className="p-4 font-bold text-indigo-900">{p.name || p.id}</td>
+                                <td className="p-4 text-slate-500 max-w-xs truncate">{p.description || '-'}</td>
+                                <td className="p-4"><span className={`px-2 py-1 rounded-full text-[10px] font-black ${p.manager_status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{p.manager_status.toUpperCase()}</span></td>
+                                <td className="p-4 text-right flex justify-end gap-2">
+                                  <button onClick={() => openProject(p.id)} className="text-indigo-600 font-black text-xs hover:underline">ABRIR</button>
+                                  <button onClick={() => deleteProject(p.id, p.name)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
                 )}
               </motion.div>
             )}
@@ -343,7 +415,14 @@ const Dashboard = () => {
             )}
 
             {view === 'chat' && (
-              <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6">
+              <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full p-6 relative overflow-hidden">
+                {controlling && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+                    <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <h3 className="text-2xl font-black mb-2 text-indigo-950">Ativando o Motor de Gestão...</h3>
+                    <p className="text-slate-500 text-sm max-w-sm">Estamos enviando a diretriz master e sincronizando o Roadmap com o subagente.</p>
+                  </motion.div>
+                )}
                 <div className="h-full flex gap-4">
                   <div className="flex-1 flex flex-col min-w-0">
                     <div className="mb-3 text-xs text-slate-500 font-semibold">Projeto: {selectedProject?.name || selectedProject?.id || 'não selecionado'} • Sessão: {manager?.manager_session_key || selectedProject?.manager_session_key || '-'}</div>
