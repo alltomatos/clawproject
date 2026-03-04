@@ -434,8 +434,8 @@ func (s *Server) handleProjectDeliver(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	if project.Status != "ready_for_delivery" && !req.Force {
-		http.Error(w, "project status must be ready_for_delivery", http.StatusConflict)
+	if project.Status != "ready_for_delivery" && project.Status != "active" && !req.Force {
+		http.Error(w, "project status must be ready_for_delivery or active", http.StatusConflict)
 		return
 	}
 
@@ -583,7 +583,7 @@ func detectNiche(msg string) string {
 	return "geral"
 }
 
-func expectedDeliverablesForNiche(niche string) []string { return []string{"PLANNING.md", "ROADMAP.md", "ENTREGAVEIS.md"} }
+func expectedDeliverablesForNiche(niche string) []string { return []string{"PLANNING.md", "ROADMAP.md", "DELIVERY.md"} }
 
 func (s *Server) updatePlanningFromState(project *core.Project, st *db.PlannerState) error {
 	path := filepath.Join(project.Path, "docs", "PLANNING.md")

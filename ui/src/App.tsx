@@ -59,8 +59,8 @@ const Dashboard = () => {
     return p.manager_status.toLowerCase() === statusFilter.toLowerCase();
   });
   const managerOnline = manager?.manager_status === 'active';
-  const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'visual_checklist', 'active'];
-  const stageLabels: Record<string, string> = { triage_type: 'Tipo', triage_niche: 'Nicho', objective: 'Objetivo', deliverables: 'Entregáveis', visual_checklist: 'Checklist Visual', active: 'Execução' };
+  const plannerStages = ['triage_type', 'triage_niche', 'objective', 'deliverables', 'active'];
+  const stageLabels: Record<string, string> = { triage_type: 'Tipo', triage_niche: 'Nicho', objective: 'Objetivo', deliverables: 'Entregáveis', active: 'Execução' };
   const stageIndex = planner ? Math.max(0, plannerStages.indexOf(planner.stage)) : 0;
 
   const loadProjects = async () => {
@@ -77,8 +77,10 @@ const Dashboard = () => {
 
   const loadManager = async (projectId: string) => {
     const r = await fetch(`/api/projects/${projectId}/manager`);
-    if (!r.ok) return;
-    setManager(await r.json());
+    if (!r.ok) return null;
+    const data: ManagerInfo = await r.json();
+    setManager(data);
+    return data;
   };
 
   const loadPlanner = async (projectId: string) => {
@@ -99,8 +101,8 @@ const Dashboard = () => {
   useEffect(() => {
     const boot = async () => {
       if (!selectedProjectId) return;
-      await Promise.all([loadMessages(selectedProjectId), loadManager(selectedProjectId), loadPlanner(selectedProjectId)]);
-      if ((manager?.manager_status === 'offline' || manager?.manager_status === 'paused') && !reconnectAttemptedRef.current[selectedProjectId]) {
+      const [, mgr] = await Promise.all([loadMessages(selectedProjectId), loadManager(selectedProjectId), loadPlanner(selectedProjectId)]);
+      if ((mgr?.manager_status === 'offline' || mgr?.manager_status === 'paused') && !reconnectAttemptedRef.current[selectedProjectId]) {
         reconnectAttemptedRef.current[selectedProjectId] = true;
         await fetch(`/api/projects/${selectedProjectId}/manager/control`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'resume' }),
@@ -178,6 +180,32 @@ const Dashboard = () => {
       }
 
       await Promise.all([loadManager(selectedProjectId), loadPlanner(selectedProjectId), loadProjects(), loadMessages(selectedProjectId)]);
+    } finally {
+      setControlling(false);
+    }
+  };
+
+  const handleDeliver = async () => {
+    if (!selectedProjectId || controlling) return;
+    const approvedBy = window.prompt('Aprovado por (obrigatório):', leaderName || 'ronaldo') || '';
+    if (!approvedBy.trim()) return;
+    const notes = window.prompt('Notas de entrega (opcional):', 'entrega MVP') || '';
+    const force = window.confirm('Forçar entrega mesmo com validações pendentes?');
+
+    setControlling(true);
+    try {
+      const r = await fetch(`/api/projects/${selectedProjectId}/deliver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved_by: approvedBy.trim(), notes, force }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(`Falha no deliver: ${data?.error || data?.message || r.statusText}`);
+      } else {
+        alert('Entrega concluída com sucesso ✅');
+      }
+      await Promise.all([loadProjects(), loadPlanner(selectedProjectId), loadMessages(selectedProjectId)]);
     } finally {
       setControlling(false);
     }
@@ -469,6 +497,13 @@ const Dashboard = () => {
                           🚀 START PROJETO (ATIVAR BÍBLIA)
                         </button>
                       )}
+                      <button 
+                        onClick={handleDeliver}
+                        disabled={controlling || !selectedProjectId}
+                        className="w-full mt-2 py-3 px-4 bg-emerald-600 text-white rounded-xl font-black text-xs hover:bg-emerald-700 transition-colors apple-shadow disabled:opacity-50"
+                      >
+                        ✅ DELIVER PROJETO
+                      </button>
                     </Panel>
                   </aside>
                 </div>
